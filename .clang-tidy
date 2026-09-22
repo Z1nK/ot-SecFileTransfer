@@ -1,0 +1,28 @@
+Checks: '-*,
+bugprone-*,
+cppcoreguidelines-*,
+misc-*,
+modernize-*,
+performance-*,
+readability-*,
+hicpp-*,
+google-*,
+cert-*,
+-readability-magic-numbers,
+-readability-implicit-bool-conversion,
+-modernize-use-trailing-return-type,
+-modernize-use-nodiscard,
+-cppcoreguidelines-pro-type-const-cast,
+-cppcoreguidelines-avoid-magic-numbers,
+-cppcoreguidelines-avoid-non-const-global-variables,
+-cppcoreguidelines-special-member-functions,
+-cppcoreguidelines-avoid-goto,
+-cppcoreguidelines-owning-memory,
+-bugprone-reserved-identifier,
+-cert-err58-cpp,
+'
+CheckOptions:
+  - key:             misc-non-private-member-variables-in-classes.IgnoreClassesWithAllMemberVariablesBeingPublic
+    value:           '1'
+  - key:             cppcoreguidelines-non-private-member-variables-in-classes.IgnoreClassesWithAllMemberVariablesBeingPublic
+    value:           '1'

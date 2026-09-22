@@ -1,0 +1,16 @@
+#pragma once
+
+//! Automatically generated from version_constants.h.in. Should be used via API provided by
+//! /version.h
+
+#include <string>
+
+namespace
+{
+
+const int kProjectVersionMajor = @PROJECT_VERSION_MAJOR@;
+const int kProjectVersionMinor = @PROJECT_VERSION_MINOR@;
+const int kProjectVersionPatch = @PROJECT_VERSION_PATCH@;
+const std::string kProjectVersionString = "@PROJECT_VERSION@";
+
+}  // namespace
