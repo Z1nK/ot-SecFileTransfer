@@ -51,6 +51,8 @@ public:
 
   TechLog(const TechLog&) = delete;
   TechLog& operator=(const TechLog&) = delete;
+  TechLog(TechLog&&) = delete;
+  TechLog& operator=(TechLog&&) = delete;
 
   template <class... Args>
   void log(LogLevel lvl, std::string_view tag, std::format_string<Args...> fmt, Args&&... args) {

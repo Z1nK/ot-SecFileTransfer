@@ -58,7 +58,7 @@ std::string_view to_string(LogLevel level) {
   return "unknown";
 }
 
-void ConsoleSink::write(LogLevel, std::string_view jsonl) {
+void ConsoleSink::write(LogLevel /*level*/, std::string_view jsonl) {
   std::cout << jsonl << '\n';
 }
 
