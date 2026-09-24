@@ -3,6 +3,7 @@ confide_add_unit_tests(common_tests
     error_test.cpp
     id_test.cpp
     path_sanitizer_test.cpp
+    sha256_test.cpp
     time_test.cpp
   LIBS
     ${PROJECT_NAMESPACE}::common-static

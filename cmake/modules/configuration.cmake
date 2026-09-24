@@ -52,6 +52,9 @@ if(NOT Boost_FOUND)
   message(FATAL_ERROR "Boost library not found")
 endif()
 
+# SHA-256 in common; TLS for api/net later (FR-11).
+find_package(OpenSSL REQUIRED)
+
 
 # -----------------------------------------------------------------------------
 # Generating config files
