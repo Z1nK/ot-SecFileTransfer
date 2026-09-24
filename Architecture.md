@@ -281,7 +281,57 @@ project/
 └── tests/           (unit/, integration/)
 ```
 
-## 12. Suggested Build Order (about 2 weeks of evenings)
+## 12. Module Development Order (by dependency)
+
+A module can be started once everything it depends on is ready. Modules on the same level do not depend on each other, so they can be built in any order or in parallel. Most modules also use `common` (errors, ids), even where the diagram in section 3 does not draw that arrow.
+
+```mermaid
+flowchart BT
+    subgraph L0[Level 0]
+        cm[common]
+    end
+    subgraph L1[Level 1]
+        cfg[config]
+        lg[logging]
+        st[storage]
+        net[net]
+    end
+    subgraph L2[Level 2]
+        auth[auth]
+        tx[transaction]
+    end
+    subgraph L3[Level 3]
+        api[api]
+        ret[retention]
+        cl[client ftc]
+    end
+    subgraph L4[Level 4]
+        fw[forwarder]
+    end
+    subgraph L5[Level 5]
+        main[main]
+    end
+    L0 --> L1 --> L2 --> L3 --> L4 --> L5
+```
+
+| Order | Module | Depends on | Needed by | Notes |
+|-------|--------|------------|-----------|-------|
+| 1 | `common` | — | everything | `Error` / `expected` first (other modules return it), then ids, time, path sanitizer, `Sha256`. |
+| 2a | `config` | `common` | `auth`, `main` | Loads everything else's settings; start with the fields you need now and add later. |
+| 2b | `logging` | `common` | `transaction`, `api`, `forwarder`, `retention` | Technical logger first, business logger before `transaction`. |
+| 2c | `storage` | `common` | `transaction`, `api`, `forwarder`, `retention` | Streamed write to `tmp/` with hashing, atomic rename, streamed read. Unit-testable alone. |
+| 2d | `net` | `common` | `client`, `forwarder` | Not needed until level 3; can be postponed until `api` exists, so it can be tested against a real server. |
+| 3a | `auth` | `config`, `common` | `api` | User store from config, password check, peer token. |
+| 3b | `transaction` | `storage`, `logging`, `common` | `api`, `forwarder`, `retention` | Inside the module: model and `State` → state machine → repository (`meta.json`, `manifest.json`) → `TransactionService` (locks, access rules). The core of the project. |
+| 4a | `api` | `auth`, `transaction`, `storage`, `logging`, `common` | `main` (and peer servers via `/internal`) | First point where the full flow can be tested with `curl`. |
+| 4b | `retention` | `transaction`, `storage`, `logging` | `main` | Small; only needs `TransactionService` to list and delete expired transactions. |
+| 4c | `client` (`ftc`) | `net` | — | Separate executable; testable once `api` is running. |
+| 5 | `forwarder` | `transaction`, `storage`, `net`, `logging` | `main` | Needs `net`, and for end-to-end tests the `/internal` endpoints of `api` on the peer. |
+| 6 | `main` | `config`, `api`, `forwarder`, `retention` | — | Only wiring and signal handling. A minimal version (config + api) can exist from level 4 on and grow as modules are added. |
+
+Critical path: `common` → `storage` → `transaction` → `api` → `forwarder` → `main`. Delays in these modules delay the whole project; `config`, `logging`, `auth`, `retention` and `client` are off the critical path and can be done alongside.
+
+## 13. Suggested Build Order (about 2 weeks of evenings)
 
 | Stage | Modules | Result |
 |-------|---------|--------|
