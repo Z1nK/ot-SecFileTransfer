@@ -109,6 +109,8 @@ using Result = std::expected<T, Error>;
 
 }  // namespace confide::common
 
+// NOLINTBEGIN(cppcoreguidelines-macro-usage)
+
 #define CFD_CAT_IMPL(a, b) a##b
 #define CFD_CAT(a, b) CFD_CAT_IMPL(a, b)
 
@@ -127,3 +129,5 @@ using Result = std::expected<T, Error>;
     if (!CFD_CAT(_cfd_r_, __LINE__))                                         \
       return std::unexpected(std::move(CFD_CAT(_cfd_r_, __LINE__)).error()); \
   } while (0)
+
+  // NOLINTEND(cppcoreguidelines-macro-usage)
