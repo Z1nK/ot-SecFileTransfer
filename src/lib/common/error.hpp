@@ -120,7 +120,7 @@ using Result = std::expected<T, Error>;
   auto&& CFD_CAT(_cfd_r_, __LINE__) = (expr);                              \
   if (!CFD_CAT(_cfd_r_, __LINE__))                                         \
     return std::unexpected(std::move(CFD_CAT(_cfd_r_, __LINE__)).error()); \
-  auto var = std::move(*CFD_CAT(_cfd_r_, __LINE__))
+  auto var = std::move(*CFD_CAT(_cfd_r_, __LINE__)) // NOLINT(bugprone-macro-parentheses)
 
 // Variant of CFD_TRY for Result<void> expressions where no value is bound.
 #define CFD_TRYV(expr)                                                       \
