@@ -2,6 +2,7 @@ set(LOCAL_LIB_NAME common)
 
 add_library(${LOCAL_LIB_NAME} STATIC
   id.cpp
+  time.cpp
 )
 
 add_library(${PROJECT_NAMESPACE}::common-static ALIAS ${LOCAL_LIB_NAME})
