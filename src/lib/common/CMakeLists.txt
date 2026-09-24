@@ -2,6 +2,7 @@ set(LOCAL_LIB_NAME common)
 
 add_library(${LOCAL_LIB_NAME} STATIC
   id.cpp
+  path_sanitizer.cpp
   time.cpp
 )
 
