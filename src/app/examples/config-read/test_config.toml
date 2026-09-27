@@ -1,0 +1,42 @@
+# Test config for local runs. Copied next to the binaries on every build.
+# Relative paths are resolved against this file's directory (the bin folder).
+
+instance_name = "siteA"
+
+[storage]
+root = "data"
+
+[rest]
+bind = "127.0.0.1"
+port = 8080
+threads = 4
+
+[tls]
+enabled = false                  # local testing only
+
+[auth]
+token_ttl_s = 3600
+
+[[user]]
+name = "alice"
+password_hash = "test-hash-alice"
+
+[[user]]
+name = "bob"
+password_hash = "test-hash-bob"
+
+[log]
+level = "debug"
+dir = "logs"
+
+[retention]
+default_days = 1
+max_days = 7
+sweep_interval_s = 60
+
+[[peer]]
+name = "siteB"
+host = "127.0.0.1"
+port = 8081
+token = "siteA-to-siteB"
+accept_token = "siteB-to-siteA"
