@@ -3,6 +3,9 @@ set(LOCAL_LIB_NAME logging)
 find_package(Threads REQUIRED)
 
 add_library(${LOCAL_LIB_NAME} STATIC
+  business_log.cpp
+  json.cpp
+  sink.cpp
   tech_log.cpp
 )
 
@@ -15,10 +18,12 @@ target_include_directories(${LOCAL_LIB_NAME} PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/..>
   )
 
-# std::thread is part of the public header (TechLog member), so consumers
-# need the thread library as well.
+# std::thread is part of the public header (TechLog member), and
+# business_log.hpp uses common's TransactionId and IClock, so consumers
+# need both as well.
 target_link_libraries(${LOCAL_LIB_NAME} PUBLIC
   Threads::Threads
+  ${PROJECT_NAMESPACE}::common-static
 )
 
 if (MSVC)
