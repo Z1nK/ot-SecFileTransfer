@@ -54,6 +54,7 @@ endif()
 
 # SHA-256 in common; TLS for api/net later (FR-11).
 find_package(OpenSSL REQUIRED)
+find_package(toml11 CONFIG REQUIRED)
 
 
 # -----------------------------------------------------------------------------
