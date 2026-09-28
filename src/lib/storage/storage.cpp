@@ -221,7 +221,7 @@ Result<StoredFile> Upload::finish(const std::optional<Sha256Digest>& expected) {
     return io_error("rename", path_.str(), ec);
   }
   done_ = true;
-  return StoredFile{path_, size_, digest};
+  return StoredFile{.path=path_, .size=size_, .sha256=digest};
 }
 
 // --- Download ---------------------------------------------------------------
@@ -354,7 +354,7 @@ Result<FileInfo> FileStore::stat(const TransactionId& id, const RelativePath& pa
   if (ec) {
     return io_error("stat", path.str(), ec);
   }
-  return FileInfo{path, size};
+  return FileInfo{.path=path, .size=size};
 }
 
 Result<StoredFile> FileStore::hash_file(const TransactionId& id, const RelativePath& path) const {
@@ -371,7 +371,7 @@ Result<StoredFile> FileStore::hash_file(const TransactionId& id, const RelativeP
     size += n;
   }
   CFD_TRY(digest, hasher.finish());
-  return StoredFile{path, size, digest};
+  return StoredFile{.path=path, .size=size, .sha256=digest};
 }
 
 Result<void> FileStore::remove_file(const TransactionId& id, const RelativePath& path) {
@@ -416,7 +416,7 @@ Result<std::vector<FileInfo>> FileStore::list_files(const TransactionId& id) con
       break;
     }
     CFD_TRY(rel, RelativePath::from_local(files, it->path()));
-    out.push_back(FileInfo{std::move(rel), size});
+    out.push_back(FileInfo{.path=std::move(rel), .size=size});
   }
   if (ec) {
     return io_error("list files of", id.str(), ec);

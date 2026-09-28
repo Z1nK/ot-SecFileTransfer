@@ -39,7 +39,7 @@ void TechLog::push(LogLevel level, std::string_view tag, std::string message) {
     dropped_.fetch_add(1, std::memory_order_relaxed);
     return;
   }
-  queue_.push_back(Record{level, std::move(line)});
+  queue_.push_back(Record{.level=level, .line=std::move(line)});
   cv_.notify_one();
 }
 
