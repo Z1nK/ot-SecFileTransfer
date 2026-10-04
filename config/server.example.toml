@@ -22,7 +22,7 @@ token_ttl_s = 3600
 
 [[user]]
 name = "alice"
-password_hash = "<hash>"         # plaintext `password` is rejected
+password_hash = "<hash>"         # from `confide-passwd`; plaintext `password` is rejected
 
 [[user]]
 name = "bob"
