@@ -1,0 +1,9 @@
+confide_add_unit_tests(api_tests
+  SOURCES
+    json_test.cpp
+    router_test.cpp
+    server_test.cpp
+  LIBS
+    ${PROJECT_NAMESPACE}::api-static
+    Boost::json
+)
