@@ -1,9 +1,11 @@
 set(LOCAL_EXE_NAME confide-server)
 
-# main.cpp wires in the auth module; skip the server until it exists, so the
-# rest of the project still configures and builds.
-if(NOT TARGET ${PROJECT_NAMESPACE}::auth-static)
-  message(STATUS "${LOCAL_EXE_NAME}: skipped, ${PROJECT_NAMESPACE}::auth-static not found")
+# main.cpp needs TransactionService and TransactionRepository, which are
+# only declared so far; skip the server until they are implemented, so the
+# rest of the project still builds.
+set(TRANSACTION_DIR ${PROJECT_SOURCE_DIR}/src/lib/transaction)
+if(NOT EXISTS ${TRANSACTION_DIR}/service.cpp OR NOT EXISTS ${TRANSACTION_DIR}/repository.cpp)
+  message(STATUS "${LOCAL_EXE_NAME}: skipped until transaction/service.cpp and repository.cpp exist")
   return()
 endif()
 
