@@ -7,6 +7,7 @@
 // until then committed remote transactions stay `committed` and nothing
 // expires.
 
+#include <api/authenticator.hpp>
 #include <api/handlers.hpp>
 #include <api/router.hpp>
 #include <api/server.hpp>
@@ -32,6 +33,7 @@
 #include <span>
 #include <string_view>
 #include <system_error>
+#include <utility>
 
 namespace {
 
@@ -73,6 +75,31 @@ transaction::DestinationCheck destination_check(const config::Config& cfg) {
   };
 }
 
+// api::IAuthenticator on top of auth::Authenticator: hands it the
+// Authorization header and turns the name it returns into a Caller.
+class HeaderAuthenticator final : public api::IAuthenticator {
+public:
+  explicit HeaderAuthenticator(const auth::Authenticator& auth) : auth_(auth) {}
+
+  Result<transaction::Caller> authenticate_user(const api::RequestHeader& req) const override {
+    CFD_TRY(name, auth_.authenticate_user(authorization(req)));
+    return transaction::Caller{.name = std::move(name), .is_peer = false};
+  }
+
+  Result<transaction::Caller> authenticate_peer(const api::RequestHeader& req) const override {
+    CFD_TRY(name, auth_.authenticate_peer(authorization(req)));
+    return transaction::Caller{.name = std::move(name), .is_peer = true};
+  }
+
+private:
+  static std::string_view authorization(const api::RequestHeader& req) {
+    const auto value = req[boost::beast::http::field::authorization];
+    return {value.data(), value.size()};
+  }
+
+  const auth::Authenticator& auth_;
+};
+
 // Builds the services and serves until a signal arrives. The logs are
 // created by the caller so that a failure here still reaches them.
 Result<void> serve(const config::Config& cfg, const common::IClock& clock, logging::TechLog& tlog,
@@ -95,7 +122,8 @@ Result<void> serve(const config::Config& cfg, const common::IClock& clock, loggi
   api::Router router;
   CFD_TRYV(handlers.register_routes(router));
 
-  const auth::Authenticator authenticator(cfg);
+  CFD_TRY(users_and_peers, auth::Authenticator::create(cfg));
+  const HeaderAuthenticator authenticator(users_and_peers);
 
   CFD_TRY(options, api::ServerOptions::from_config(cfg));
   const bool tls = options.tls != nullptr;
