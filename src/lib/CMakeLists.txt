@@ -1,6 +1,7 @@
 add_subdirectory(common)
 add_subdirectory(logging)
 add_subdirectory(config)
+add_subdirectory(auth)
 add_subdirectory(storage)
 add_subdirectory(transaction)
 add_subdirectory(api)
