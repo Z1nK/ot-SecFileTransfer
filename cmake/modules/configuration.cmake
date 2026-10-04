@@ -48,14 +48,19 @@ if(POLICY CMP0167)
   cmake_policy(SET CMP0167 NEW)
 endif()
 # Boost.JSON: meta.json / manifest.json in transaction, request bodies in api.
-find_package(Boost REQUIRED COMPONENTS json)
+# Boost.Beast / Boost.Asio (api, net) are header-only -> Boost::headers;
+# 1.83+ for asio::as_tuple with C++20 coroutines.
+find_package(Boost 1.83 REQUIRED COMPONENTS json)
 if(NOT Boost_FOUND)
   message(FATAL_ERROR "Boost library not found")
 endif()
 
-# SHA-256 in common; TLS for api/net later (FR-11).
+# SHA-256 in common (OpenSSL::Crypto); TLS in api/net (OpenSSL::SSL).
 find_package(OpenSSL REQUIRED)
 find_package(toml11 CONFIG REQUIRED)
+
+# Thread pool of the api server, TechLog writer thread.
+find_package(Threads REQUIRED)
 
 
 # -----------------------------------------------------------------------------
