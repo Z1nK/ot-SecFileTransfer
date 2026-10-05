@@ -27,13 +27,13 @@
     },
     {
       "name": "x64-debug-linux-BT",
-      "displayName": "x64 Debug Linux (build-tree export)",
+      "displayName": "x64 Debug Linux (build-tree export) (not impl)",
       "inherits": "x64-debug-linux",
       "cacheVariables": { "EXPORT_BUILD_TREE": "ON" }
     },
     {
       "name": "x64-release-linux-BT",
-      "displayName": "x64 Release Linux (build-tree export)",
+      "displayName": "x64 Release Linux (build-tree export) (not impl)",
       "inherits": "x64-release-linux",
       "cacheVariables": { "EXPORT_BUILD_TREE": "ON" }
     }
