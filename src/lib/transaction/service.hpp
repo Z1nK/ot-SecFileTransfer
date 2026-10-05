@@ -15,8 +15,6 @@
 #include <unordered_map>
 #include <vector>
 
-// TODO: implement (needs repository).
-
 namespace confide::transaction {
 
 // Who is calling. Filled by `api` from auth's principal, so this module does
