@@ -8,8 +8,6 @@
 #include <unordered_map>
 #include <vector>
 
-// TODO: implement (needs codec).
-
 namespace confide::transaction {
 
 // Persists transactions as meta.json / manifest.json through FileStore and
