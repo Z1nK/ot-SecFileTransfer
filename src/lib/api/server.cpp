@@ -380,6 +380,12 @@ void HttpServer::Impl::stop() {
   }
 }
 
+// GCC false positive: the temporary produced by `co_await` lives in the coroutine frame and
+// GCC cannot prove it is initialized when the frame is torn down.
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+#endif
 asio::awaitable<void> HttpServer::Impl::accept_loop() {
   while (acceptor->is_open()) {
     auto [ec, socket] = co_await acceptor->async_accept(asio::make_strand(ioc), kTok);
@@ -394,6 +400,9 @@ asio::awaitable<void> HttpServer::Impl::accept_loop() {
     asio::co_spawn(exec, serve(std::move(socket)), asio::detached);
   }
 }
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
 asio::awaitable<void> HttpServer::Impl::serve(tcp::socket socket) {
   beast::tcp_stream stream{std::move(socket)};
