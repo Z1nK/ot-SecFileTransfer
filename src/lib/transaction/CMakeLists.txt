@@ -1,8 +1,9 @@
 set(LOCAL_LIB_NAME transaction)
 
-# repository.cpp and service.cpp are added once implemented.
 add_library(${LOCAL_LIB_NAME} STATIC
   codec.cpp
+  repository.cpp
+  service.cpp
   state_machine.cpp
   transaction.cpp
 )
