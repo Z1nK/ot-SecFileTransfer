@@ -1,3 +1,6 @@
 /IDEA.md
 /ot-SecFileTransfer.code-workspace
 /build
+compile_commands.json
+/.cache
+.clangd

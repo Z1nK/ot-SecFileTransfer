@@ -1,0 +1,8 @@
+{
+  "name": "ot-secfiletransfer",
+  "version": "0.1.0",
+  "dependencies": [
+    "toml11",    
+    "gtest"
+  ]
+}

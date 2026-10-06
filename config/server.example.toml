@@ -1,0 +1,46 @@
+# Example server config. Relative paths are resolved against this file's directory.
+
+instance_name = "siteA"          # [A-Za-z0-9._-], used in `bob@siteA`
+
+[storage]
+root = "/var/lib/confide"        # holds tmp/ and transactions/
+
+[rest]
+bind = "0.0.0.0"
+port = 8080
+threads = 0                      # 0 = number of cores
+request_timeout_ms = 30000
+
+[tls]
+enabled = true                   # set false for local testing only
+cert = "/etc/confide/cert.pem"
+key = "/etc/confide/key.pem"
+# ca = "/etc/confide/ca.pem"     # verifies peers; default = system CAs
+
+[auth]
+token_ttl_s = 3600
+
+[[user]]
+name = "alice"
+password_hash = "<hash>"         # from `confide-passwd`; plaintext `password` is rejected
+
+[[user]]
+name = "bob"
+password_hash = "<hash>"
+
+[log]
+level = "info"                   # trace | debug | info | warn | error
+dir = "/var/log/confide"         # default: <storage.root>/logs
+rotate_bytes = 67108864          # 0 = never rotate
+
+[retention]
+default_days = 30
+max_days = 365
+sweep_interval_s = 3600
+
+[[peer]]
+name = "siteB"
+host = "siteb.example.org"
+port = 8080
+token = "<token we send to siteB>"
+accept_token = "<token siteB sends to us>"

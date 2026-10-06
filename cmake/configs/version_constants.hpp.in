@@ -5,12 +5,11 @@
 
 #include <string>
 
-namespace
-{
+namespace {
 
-const int kProjectVersionMajor = @PROJECT_VERSION_MAJOR@;
-const int kProjectVersionMinor = @PROJECT_VERSION_MINOR@;
-const int kProjectVersionPatch = @PROJECT_VERSION_PATCH@;
+const int kProjectVersionMajor = @PROJECT_VERSION_MAJOR @;
+const int kProjectVersionMinor = @PROJECT_VERSION_MINOR @;
+const int kProjectVersionPatch = @PROJECT_VERSION_PATCH @;
 const std::string kProjectVersionString = "@PROJECT_VERSION@";
 
 }  // namespace

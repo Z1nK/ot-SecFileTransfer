@@ -1,0 +1,50 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "linux-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/",
+      "installDir": "${sourceDir}/install/",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "CMAKE_CXX_COMPILER": "g++"
+      }
+    },
+    {
+      "name": "x64-debug-linux",
+      "displayName": "x64 Debug Linux",
+      "inherits": "linux-base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "x64-release-linux",
+      "displayName": "x64 Release Linux",
+      "inherits": "linux-base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "x64-debug-linux-BT",
+      "displayName": "x64 Debug Linux (build-tree export) (not impl)",
+      "inherits": "x64-debug-linux",
+      "cacheVariables": { "EXPORT_BUILD_TREE": "ON" }
+    },
+    {
+      "name": "x64-release-linux-BT",
+      "displayName": "x64 Release Linux (build-tree export) (not impl)",
+      "inherits": "x64-release-linux",
+      "cacheVariables": { "EXPORT_BUILD_TREE": "ON" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "x64-debug-linux", "configurePreset": "x64-debug-linux" },
+    { "name": "x64-release-linux", "configurePreset": "x64-release-linux" },
+    { "name": "x64-debug-linux-BT", "configurePreset": "x64-debug-linux-BT" },
+    { "name": "x64-release-linux-BT", "configurePreset": "x64-release-linux-BT" }
+  ],
+  "testPresets": [
+    { "name": "x64-debug-linux", "configurePreset": "x64-debug-linux", "output": {"outputOnFailure": true} }
+  ]
+}

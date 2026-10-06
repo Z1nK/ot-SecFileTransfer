@@ -10,6 +10,7 @@ google-*,
 cert-*,
 -readability-magic-numbers,
 -readability-implicit-bool-conversion,
+-readability-identifier-length,
 -modernize-use-trailing-return-type,
 -modernize-use-nodiscard,
 -cppcoreguidelines-pro-type-const-cast,
@@ -26,3 +27,7 @@ CheckOptions:
     value:           '1'
   - key:             cppcoreguidelines-non-private-member-variables-in-classes.IgnoreClassesWithAllMemberVariablesBeingPublic
     value:           '1'
+  - key: cppcoreguidelines-special-member-functions.AllowSoleDefaultDtor
+    value: true
+  - key: hicpp-special-member-functions.AllowSoleDefaultDtor
+    value: true
