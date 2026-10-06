@@ -1,0 +1,87 @@
+name: 'C++ CI SecFileTransfer'
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  CONFIGURE_PRESET: x64-release-linux
+  BUILD_DIR: build
+  VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.vcpkg-cache
+
+jobs:
+  build:
+    name: Build & Package
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++-14 ninja-build pkg-config \
+            libboost-json-dev libssl-dev
+
+      - name: Setup vcpkg
+        run: |
+          git clone --depth 1 https://github.com/microsoft/vcpkg.git "$RUNNER_TEMP/vcpkg"
+          "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+          echo "VCPKG_ROOT=$RUNNER_TEMP/vcpkg" >> "$GITHUB_ENV"
+          mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
+
+      - name: Cache vcpkg binaries
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+          key: vcpkg-${{ runner.os }}-gcc14-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-${{ runner.os }}-gcc14-
+
+      - name: Configure
+        run: |
+          cmake --preset ${{ env.CONFIGURE_PRESET }} \
+            -DCMAKE_CXX_COMPILER=g++-14 \
+            -DCMAKE_C_COMPILER=gcc-14 \
+            -DPATCH_VERSION=${{ github.run_number }}
+
+      - name: Build
+        run: cmake --build --preset ${{ env.CONFIGURE_PRESET }}
+
+      - name: Run tests
+        run: ctest --test-dir ${{ env.BUILD_DIR }} --output-on-failure
+
+      - name: Create package
+        run: cmake --build --preset ${{ env.CONFIGURE_PRESET }} --target package
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-package
+          path: ${{ env.BUILD_DIR }}/SecFileTransfer-0.0.${{ github.run_number }}-Linux.deb
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    name: Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download .deb artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: deb-package
+
+      - name: Create GitHub Release and upload asset
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create ${{ github.run_number }} \
+            --repo ${{ github.repository }} \
+            --title "Release ${{ github.run_number }}" \
+            --notes "Automated release ${{ github.run_number }}" \
+            ./SecFileTransfer-0.0.${{ github.run_number }}-Linux.deb
