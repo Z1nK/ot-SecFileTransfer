@@ -18,9 +18,10 @@ See [Requirements.md](Requirements.md) and [Architecture.md](Architecture.md) fo
 |-----------|--------------|
 | create / upload / delete / commit / list / download over REST | forwarding to a peer server (transactions to `user@otherServer` stay `committed`) |
 | TLS on/off | retention sweep (expired transactions are not deleted yet) |
-| Basic auth, access rules, path checks | `ftc` command-line client (use `curl`) |
-| business and technical logs, log rotation | Bearer tokens for users (`auth.token_ttl_s` is read but unused) |
+| Basic auth, access rules, path checks | Bearer tokens for users (`auth.token_ttl_s` is read but unused) |
+| business and technical logs, log rotation | |
 | `/internal/...` peer endpoints (receiving side) | |
+| `ftc` client: `send`, `inbox`, `outbox`, `show`, `files`, `get` | |
 
 ## 1. Build
 
@@ -30,7 +31,7 @@ See [Requirements.md](Requirements.md) and [Architecture.md](Architecture.md) fo
 - g++ 15 (C++23)
 - CMake 3.21+ and Ninja
 - [vcpkg](https://github.com/microsoft/vcpkg) with `VCPKG_ROOT` set. It installs `toml11` and `gtest` from [vcpkg.json](vcpkg.json).
-- Boost 1.83+ (`json` component, plus header-only Asio/Beast) and OpenSSL, from the system
+- Boost 1.83+ (`json` and `program_options` components, plus header-only Asio/Beast) and OpenSSL, from the system
 
 On Ubuntu:
 
@@ -55,6 +56,7 @@ Both presets use the same directory `build/`. Binaries go to `build/bin/`:
 |--------|------------|
 | `confide-server` | the server |
 | `confide-passwd` | prints a password hash for the config |
+| `ftc` | command-line client (`ftc --help`) |
 | `*_tests` | unit tests (one per module) |
 | `example-*` | small examples, not needed to run the server |
 

@@ -24,7 +24,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y g++-14 ninja-build pkg-config \
-            libboost-json-dev libssl-dev
+            libboost-json-dev libboost-program-options-dev libssl-dev
 
       - name: Setup vcpkg
         run: |

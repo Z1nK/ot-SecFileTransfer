@@ -50,7 +50,8 @@ endif()
 # Boost.JSON: meta.json / manifest.json in transaction, request bodies in api.
 # Boost.Beast / Boost.Asio (api, net) are header-only -> Boost::headers;
 # 1.83+ for asio::as_tuple with C++20 coroutines.
-find_package(Boost 1.83 REQUIRED COMPONENTS json)
+# Boost.ProgramOptions: command line of the ftc client.
+find_package(Boost 1.83 REQUIRED COMPONENTS json program_options)
 if(NOT Boost_FOUND)
   message(FATAL_ERROR "Boost library not found")
 endif()
