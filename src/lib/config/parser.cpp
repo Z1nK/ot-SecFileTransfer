@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <format>
+#include <fstream>
 #include <limits>
 #include <unordered_set>
 #include <utility>
@@ -25,6 +26,23 @@ bool is_valid_name(std::string_view s) {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-'
            || c == '_' || c == '.';
   });
+}
+
+// Rules shared by `[[user]]` blocks and users_file lines.
+Result<void> add_user(UserCfg user, std::string_view where, std::unordered_set<std::string>& seen,
+                      std::vector<UserCfg>& users) {
+  if (!is_valid_name(user.name)) {
+    return invalid(
+        std::format("{}.name: '{}' must be 1-64 chars of [A-Za-z0-9._-]", where, user.name));
+  }
+  if (user.password_hash.empty()) {
+    return invalid(std::format("{}.password_hash is required", where));
+  }
+  if (!seen.insert(user.name).second) {
+    return invalid(std::format("{}.name: duplicate user '{}'", where, user.name));
+  }
+  users.push_back(std::move(user));
+  return {};
 }
 
 }  // namespace
@@ -182,22 +200,29 @@ Result<void> Parser::parse_tls(TlsCfg& out) {
 Result<void> Parser::parse_auth(AuthCfg& out) {
   CFD_TRY(tbl, section(root_, "auth"));
   if (tbl != nullptr) {
-    warn_unknown(*tbl, "auth.", {"token_ttl_s"});
+    warn_unknown(*tbl, "auth.", {"token_ttl_s", "users_file"});
     CFD_TRYV(get(*tbl, "token_ttl_s", "auth", out.token_ttl_s));
+    CFD_TRYV(get(*tbl, "users_file", "auth", out.users_file));
     if (out.token_ttl_s == 0) {
       return invalid("auth.token_ttl_s must be > 0");
     }
   }
 
+  std::unordered_set<std::string> seen;
+  if (!out.users_file.empty()) {
+    CFD_TRYV(parse_users_file(out.users_file, seen, out));
+  }
+
   if (!root_.contains("user")) {
-    warnings_.emplace_back("no [[user]] configured: nobody can log in");
+    if (out.users.empty()) {
+      warnings_.emplace_back("no users configured (auth.users_file or [[user]]): nobody can log in");
+    }
     return {};
   }
   const auto& users = root_.at("user");
   if (!users.is_array()) {
     return invalid("user: expected an array of tables ([[user]])");
   }
-  std::unordered_set<std::string> seen;
   std::size_t i = 0;
   for (const auto& u : users.as_array()) {
     const std::string where = std::format("user[{}]", i++);
@@ -216,17 +241,51 @@ Result<void> Parser::parse_auth(AuthCfg& out) {
     UserCfg user;
     CFD_TRYV(get(u, "name", where, user.name));
     CFD_TRYV(get(u, "password_hash", where, user.password_hash));
-    if (!is_valid_name(user.name)) {
-      return invalid(
-          std::format("{}.name: '{}' must be 1-64 chars of [A-Za-z0-9._-]", where, user.name));
+    CFD_TRYV(add_user(std::move(user), where, seen, out.users));
+  }
+  return {};
+}
+
+// Same format idea as /etc/passwd: `name:password_hash`, one per line.
+// '#' starts a comment line. A bad line is an error, never skipped.
+Result<void> Parser::parse_users_file(const fs::path& path, std::unordered_set<std::string>& seen,
+                                      AuthCfg& out) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in) {
+    return std::unexpected(Error::make(
+        ErrCode::io, std::format("auth.users_file: cannot open '{}'", path.string())));
+  }
+
+  std::error_code ec;
+  const auto perms = fs::status(path, ec).permissions();
+  if (!ec && (perms & (fs::perms::group_read | fs::perms::others_read)) != fs::perms::none) {
+    warnings_.push_back(std::format(
+        "auth.users_file: '{}' is readable by other users (chmod 600)", path.string()));
+  }
+
+  std::string line;
+  std::size_t lineno = 0;
+  while (std::getline(in, line)) {
+    ++lineno;
+    while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t')) {
+      line.pop_back();
     }
-    if (user.password_hash.empty()) {
-      return invalid(std::format("{}.password_hash is required", where));
+    const auto start = line.find_first_not_of(" \t");
+    if (start == std::string::npos || line[start] == '#') {
+      continue;
     }
-    if (!seen.insert(user.name).second) {
-      return invalid(std::format("{}.name: duplicate user '{}'", where, user.name));
+    const std::string where = std::format("{}:{}", path.string(), lineno);
+    const auto colon = line.find(':', start);
+    if (colon == std::string::npos) {
+      return invalid(std::format("{}: expected 'name:password_hash'", where));
     }
-    out.users.push_back(std::move(user));
+    UserCfg user{.name = line.substr(start, colon - start),
+                 .password_hash = line.substr(colon + 1)};
+    CFD_TRYV(add_user(std::move(user), where, seen, out.users));
+  }
+  if (in.bad()) {
+    return std::unexpected(Error::make(
+        ErrCode::io, std::format("auth.users_file: read error in '{}'", path.string())));
   }
   return {};
 }

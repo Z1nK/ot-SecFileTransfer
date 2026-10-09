@@ -13,6 +13,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <unordered_set>
 #include <vector>
 
 namespace confide::config::detail {
@@ -37,6 +38,9 @@ private:
   Result<void> parse_rest(RestCfg& out);
   Result<void> parse_tls(TlsCfg& out);
   Result<void> parse_auth(AuthCfg& out);
+  // Reads `name:password_hash` lines from `path` into `out.users`.
+  Result<void> parse_users_file(const std::filesystem::path& path,
+                                std::unordered_set<std::string>& seen, AuthCfg& out);
   Result<void> parse_log(LogCfg& out, const StorageCfg& storage);
   Result<void> parse_retention(RetentionCfg& out);
   Result<void> parse_peers(std::vector<PeerCfg>& out, const std::string& instance_name);

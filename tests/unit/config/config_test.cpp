@@ -213,3 +213,100 @@ TEST(ConfigLoader, FromFileResolvesRelativePaths) {
   EXPECT_EQ(cfg->storage().root, fs::absolute(dir) / "data");
   EXPECT_EQ(cfg->log().dir, "/abs/logs");
 }
+
+namespace {
+
+// A config file plus a users file in a fresh temp folder; removed on scope exit.
+struct UsersFixture {
+  fs::path dir = fs::temp_directory_path() / "confide_users_test";
+  fs::path config = dir / "server.toml";
+  fs::path users = dir / "users";
+
+  UsersFixture(std::string_view users_text, std::string_view extra_toml = "",
+               fs::perms mode = fs::perms::owner_read | fs::perms::owner_write) {
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    std::ofstream(config) << "instance_name = \"siteA\"\n[storage]\nroot = \"data\"\n"
+                             "[tls]\nenabled = false\n[auth]\nusers_file = \"users\"\n"
+                          << extra_toml;
+    std::ofstream(users) << users_text;
+    fs::permissions(users, mode);
+  }
+  ~UsersFixture() { fs::remove_all(dir); }
+  UsersFixture(const UsersFixture&) = delete;
+  UsersFixture& operator=(const UsersFixture&) = delete;
+};
+
+bool has_warning(const confide::config::Config& cfg, std::string_view part) {
+  for (const auto& w : cfg.warnings()) {
+    if (w.find(part) != std::string::npos) {
+      return true;
+    }
+  }
+  return false;
+}
+
+}  // namespace
+
+TEST(ConfigLoader, UsersFileLoads) {
+  UsersFixture f("# name:password_hash\n\nalice:h1\r\n  bob:h2  \n");
+  auto cfg = ConfigLoader::from_file(f.config);
+  ASSERT_TRUE(cfg.has_value()) << cfg.error().detail;
+  EXPECT_EQ(cfg->auth().users_file, fs::absolute(f.users));
+  ASSERT_EQ(cfg->auth().users.size(), 2U);
+  ASSERT_NE(cfg->find_user("alice"), nullptr);
+  EXPECT_EQ(cfg->find_user("alice")->password_hash, "h1");
+  ASSERT_NE(cfg->find_user("bob"), nullptr);
+  EXPECT_EQ(cfg->find_user("bob")->password_hash, "h2");
+  EXPECT_FALSE(has_warning(*cfg, "users_file"));
+  EXPECT_FALSE(has_warning(*cfg, "no users"));
+}
+
+TEST(ConfigLoader, UsersFileMergesWithInlineUsers) {
+  UsersFixture f("alice:h1\n", "[[user]]\nname = \"bob\"\npassword_hash = \"h2\"\n");
+  auto cfg = ConfigLoader::from_file(f.config);
+  ASSERT_TRUE(cfg.has_value()) << cfg.error().detail;
+  EXPECT_EQ(cfg->auth().users.size(), 2U);
+  EXPECT_NE(cfg->find_user("alice"), nullptr);
+  EXPECT_NE(cfg->find_user("bob"), nullptr);
+}
+
+TEST(ConfigLoader, UsersFileRules) {
+  auto expect_bad = [](std::string_view users, std::string_view extra, std::string_view part) {
+    UsersFixture f(users, extra);
+    auto cfg = ConfigLoader::from_file(f.config);
+    ASSERT_FALSE(cfg.has_value()) << users;
+    EXPECT_EQ(cfg.error().code, ErrCode::validation);
+    EXPECT_NE(cfg.error().detail.find(part), std::string::npos) << cfg.error().detail;
+  };
+  expect_bad("alice:h1\nbob\n", "", "users:2: expected 'name:password_hash'");
+  expect_bad("a@b:h1\n", "", "users:1.name");
+  expect_bad("alice:\n", "", "users:1.password_hash is required");
+  expect_bad("alice:h1\nalice:h2\n", "", "duplicate user");
+  expect_bad("alice:h1\n", "[[user]]\nname = \"alice\"\npassword_hash = \"h2\"\n",
+             "duplicate user");
+}
+
+TEST(ConfigLoader, UsersFileMissingIsIo) {
+  UsersFixture f("alice:h1\n");
+  fs::remove(f.users);
+  auto cfg = ConfigLoader::from_file(f.config);
+  ASSERT_FALSE(cfg.has_value());
+  EXPECT_EQ(cfg.error().code, ErrCode::io);
+}
+
+TEST(ConfigLoader, UsersFileReadableByOthersWarns) {
+  UsersFixture f("alice:h1\n", "",
+                 fs::perms::owner_read | fs::perms::owner_write | fs::perms::group_read
+                     | fs::perms::others_read);
+  auto cfg = ConfigLoader::from_file(f.config);
+  ASSERT_TRUE(cfg.has_value()) << cfg.error().detail;
+  EXPECT_TRUE(has_warning(*cfg, "chmod 600"));
+}
+
+TEST(ConfigLoader, UsersFileEmptyWarnsNobodyCanLogIn) {
+  UsersFixture f("# nobody yet\n");
+  auto cfg = ConfigLoader::from_file(f.config);
+  ASSERT_TRUE(cfg.has_value()) << cfg.error().detail;
+  EXPECT_TRUE(has_warning(*cfg, "no users configured"));
+}

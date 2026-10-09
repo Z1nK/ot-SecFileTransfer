@@ -43,7 +43,10 @@ struct UserCfg {
 };
 
 struct AuthCfg {
+  // users from `users_file` and from `[[user]]` blocks, merged.
   std::vector<UserCfg> users;
+  // passwd-like file with one `name:password_hash` per line; empty = none.
+  std::filesystem::path users_file{};
   uint32_t token_ttl_s = 3600; // will try to implement tokens
 };
 

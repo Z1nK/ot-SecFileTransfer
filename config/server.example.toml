@@ -19,14 +19,12 @@ key = "/etc/confide/key.pem"
 
 [auth]
 token_ttl_s = 3600
+users_file = "users"             # `name:password_hash` per line, see users.example; chmod 600
 
-[[user]]
-name = "alice"
-password_hash = "<hash>"         # from `confide-passwd`; plaintext `password` is rejected
-
-[[user]]
-name = "bob"
-password_hash = "<hash>"
+# Users can also be listed here instead of (or as well as) in users_file:
+# [[user]]
+# name = "carol"
+# password_hash = "<hash>"       # from `confide-passwd`; plaintext `password` is rejected
 
 [log]
 level = "info"                   # trace | debug | info | warn | error

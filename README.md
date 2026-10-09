@@ -83,6 +83,30 @@ read -rs PW && printf '%s\n' "$PW" | build/bin/confide-passwd
 
 `--iterations N` changes the PBKDF2 cost (lower values are only for local tests).
 
+### Users file
+
+Users are kept in a separate file, like `/etc/passwd`: one `name:password_hash` per line.
+The config points to it with `auth.users_file`. Blank lines and lines starting with `#` are
+ignored. A bad line stops the server from starting, with the file and line number in the
+message. Start from [config/users.example](config/users.example).
+
+```
+# name:password_hash
+alice:pbkdf2-sha256$600000$...$...
+bob:pbkdf2-sha256$600000$...$...
+```
+
+`confide-passwd --user NAME` prints the whole line, so you can append it directly:
+
+```bash
+read -rs PW && printf '%s\n' "$PW" | build/bin/confide-passwd --user alice >> users
+chmod 600 users
+```
+
+The server warns in the technical log if other users can read the file. Users can also be
+put in the main config as `[[user]]` blocks; both sources are merged, and the same name in
+both is an error. The file is read once at startup: restart the server after a change.
+
 ### Settings
 
 Only `instance_name`, `[storage].root` and, with TLS on, `tls.cert` / `tls.key` are required.
@@ -99,7 +123,8 @@ Everything else has a default. Unknown keys give a warning in the technical log.
 | `tls.enabled` | `true` | HTTPS on/off. `false` sends passwords and files in clear text: local testing only |
 | `tls.cert`, `tls.key` | — | PEM certificate and key, required when TLS is on |
 | `tls.ca` | system CAs | CA bundle to verify peer servers |
-| `[[user]]` `name`, `password_hash` | — | one block per local user |
+| `auth.users_file` | — | file with one `name:password_hash` per line (see [Users file](#users-file)) |
+| `[[user]]` `name`, `password_hash` | — | one block per local user, in addition to `users_file` |
 | `log.level` | `info` | `trace`, `debug`, `info`, `warn`, `error` |
 | `log.dir` | `<storage.root>/logs` | folder for `technical.log` and `business.log` |
 | `log.rotate_bytes` | `67108864` | rotate a log at this size, `0` = never |
@@ -127,14 +152,12 @@ port = 8080
 [tls]
 enabled = false
 
-[[user]]
-name = "alice"
-password_hash = "<output of confide-passwd>"
-
-[[user]]
-name = "bob"
-password_hash = "<output of confide-passwd>"
+[auth]
+users_file = "users"
 ```
+
+and next to it a `users` file with lines from `confide-passwd --user alice` and
+`confide-passwd --user bob`.
 
 ### TLS
 
