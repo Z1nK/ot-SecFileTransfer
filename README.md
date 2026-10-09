@@ -223,6 +223,44 @@ curl -u bob:bob-pw -o a.txt $U/transactions/$ID/files/report/a.txt
 
 Use `--data-binary` (not `-d`) for uploads, so curl does not change the file.
 
+### Same flow with ftc
+
+`ftc send` does steps 1–3 in one command: it creates the transaction, uploads every file
+with its SHA-256 and commits. `ftc get` downloads all files of a transaction and checks
+each SHA-256 before it keeps the file.
+
+The server comes from `-s` / `FTC_SERVER`, the user from `-u` / `FTC_USER`. The password
+is read from `FTC_PASSWORD`, or asked for on the terminal.
+
+```bash
+export FTC_SERVER=http://127.0.0.1:8080
+
+# 1-3. alice sends the folder report/ (holds a.txt) to bob; a folder keeps its
+#      name, so the file arrives as report/a.txt
+build/bin/ftc -u alice send --to bob report/
+# password for alice:
+# created b3c18f72-... for bob
+#   report/a.txt
+# committed b3c18f72-... (1 files)
+ID=b3c18f72-...
+
+# 4. bob lists incoming transactions and their files
+build/bin/ftc -u bob inbox
+build/bin/ftc -u bob show $ID
+build/bin/ftc -u bob files $ID
+
+# 5. bob downloads into ./downloads (creates ./downloads/report/a.txt)
+build/bin/ftc -u bob get $ID downloads
+```
+
+Notes:
+
+- `--to bob@siteB` sends to a user on another server, `--retention DAYS` sets `retention_days`.
+- `ftc outbox` lists the transactions you sent.
+- `get` does not overwrite existing files unless you add `--force`.
+- If an upload fails, `send` prints the id of the transaction it left `open`.
+- With TLS, use an `https://` URL and `--ca-file cert.pem` (or `FTC_CA_FILE`) for a self-signed certificate.
+
 ## 5. Check
 
 ### Unit tests
