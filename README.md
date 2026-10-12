@@ -107,6 +107,31 @@ The server warns in the technical log if other users can read the file. Users ca
 put in the main config as `[[user]]` blocks; both sources are merged, and the same name in
 both is an error. The file is read once at startup: restart the server after a change.
 
+### Groups file
+
+Groups are optional and kept in a file like `/etc/group`, without the password and GID
+fields: one `name:member,member,...` per line. The config points to it with
+`auth.groups_file`. Blank lines and `#` comments are ignored, spaces around members are
+allowed, and a group may have no members. Start from
+[config/groups.example](config/groups.example).
+
+```
+# name:member,member,...
+devs:alice,bob
+ops:carol
+```
+
+A group is a receiver like a user: `ftc send --to devs` or, from another server,
+`--to devs@siteA`. It is still one transaction with one copy of the files. Every member
+sees it in their inbox once it is committed and can download it, and only the sender can
+change it. Membership is checked on each request, so a new member also sees older group
+transactions and a removed member loses access.
+
+Users and groups share one namespace: a group with a user's name is an error, and so is a
+member that is not a configured user. Groups can also be put in the main config as
+`[[group]]` blocks (`name`, `members = ["alice", "bob"]`). The file is read once at
+startup: restart the server after a change.
+
 ### Settings
 
 Only `instance_name`, `[storage].root` and, with TLS on, `tls.cert` / `tls.key` are required.
@@ -125,6 +150,8 @@ Everything else has a default. Unknown keys give a warning in the technical log.
 | `tls.ca` | system CAs | CA bundle to verify peer servers |
 | `auth.users_file` | — | file with one `name:password_hash` per line (see [Users file](#users-file)) |
 | `[[user]]` `name`, `password_hash` | — | one block per local user, in addition to `users_file` |
+| `auth.groups_file` | — | file with one `name:member,member,...` per line (see [Groups file](#groups-file)) |
+| `[[group]]` `name`, `members` | — | one block per group, in addition to `groups_file` |
 | `log.level` | `info` | `trace`, `debug`, `info`, `warn`, `error` |
 | `log.dir` | `<storage.root>/logs` | folder for `technical.log` and `business.log` |
 | `log.rotate_bytes` | `67108864` | rotate a log at this size, `0` = never |

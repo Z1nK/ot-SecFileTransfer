@@ -50,6 +50,11 @@ enum class Box : std::uint8_t {
 using DestinationCheck =
     std::function<Result<void>(std::string_view target_user, std::string_view target_server)>;
 
+// True if `user` is a member of the group named `target`. Lets group
+// members read transactions addressed to the group. Wired by `main` to the
+// configured groups, so this module does not depend on `config`.
+using MembershipCheck = std::function<bool(std::string_view user, std::string_view target)>;
+
 // Called after a successful commit, outside the transaction lock. `main`
 // wires it to ForwardQueue::enqueue for remote targets, so this module does
 // not depend on `forwarder`.
@@ -59,6 +64,7 @@ struct ServiceOptions {
   std::string local_server;  // this server's name, from config
   int default_retention_days = 30;
   DestinationCheck check_destination;
+  MembershipCheck is_recipient;  // may be empty: only exact name matches
   CommitHook on_committed;  // may be empty
 };
 
@@ -100,7 +106,8 @@ private:
 //
 // Access rules:
 //   - sender:      everything on own transactions while open; read after
-//   - target user: list and read once committed or delivered
+//   - target user: list and read once committed or delivered; for a group
+//                  target, every member of the group (MembershipCheck)
 //   - peer:        receive / add files / commit on transactions it pushed
 //   - anyone else: `forbidden` (api may turn that into 404)
 //

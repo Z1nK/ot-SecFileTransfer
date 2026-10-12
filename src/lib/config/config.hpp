@@ -3,6 +3,7 @@
 #include "common/error.hpp"
 #include "logging/tech_log.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -42,11 +43,22 @@ struct UserCfg {
   std::string password_hash;
 };
 
+// named set of local users; a transaction sent to the group reaches every
+// member. Shares one namespace with users.
+struct GroupCfg {
+  std::string name;
+  std::vector<std::string> members;
+};
+
 struct AuthCfg {
   // users from `users_file` and from `[[user]]` blocks, merged.
   std::vector<UserCfg> users;
   // passwd-like file with one `name:password_hash` per line; empty = none.
   std::filesystem::path users_file{};
+  // groups from `groups_file` and from `[[group]]` blocks, merged.
+  std::vector<GroupCfg> groups{};
+  // group-like file with one `name:member,member,...` per line; empty = none.
+  std::filesystem::path groups_file{};
   uint32_t token_ttl_s = 3600; // will try to implement tokens
 };
 
@@ -117,6 +129,19 @@ public:
       }
     }
     return nullptr;
+  }
+  const GroupCfg* find_group(std::string_view name) const {
+    for (const auto& g : auth_.groups) {
+      if (g.name == name) {
+        return &g;
+      }
+    }
+    return nullptr;
+  }
+  // true if `user` is listed in group `group`; false for unknown groups.
+  bool is_member(std::string_view user, std::string_view group) const {
+    const auto* g = find_group(group);
+    return g != nullptr && std::ranges::find(g->members, user) != g->members.end();
   }
 
   // Non-fatal notices collected while parsing -- the caller prints these;

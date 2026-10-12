@@ -56,14 +56,16 @@ std::string describe(const Error& err) {
   return std::format("[{}] {}", common::to_string(err.code), err.detail);
 }
 
-// FR-13: a local target must be a configured user, a remote one a configured
-// peer. Whether the user exists on the peer is only known when forwarding.
+// FR-13: a local target must be a configured user or group, a remote one a
+// configured peer. Whether the user exists on the peer is only known when
+// forwarding.
 transaction::DestinationCheck destination_check(const config::Config& cfg) {
   return [&cfg](std::string_view user, std::string_view server) -> Result<void> {
     if (server.empty() || server == cfg.instance_name()) {
-      if (cfg.find_user(user) == nullptr) {
-        return std::unexpected(Error::make(ErrCode::unknown_destination,
-                                           std::format("no user '{}' on this server", user)));
+      if (cfg.find_user(user) == nullptr && cfg.find_group(user) == nullptr) {
+        return std::unexpected(
+            Error::make(ErrCode::unknown_destination,
+                        std::format("no user or group '{}' on this server", user)));
       }
       return {};
     }
@@ -115,6 +117,8 @@ Result<void> serve(const config::Config& cfg, const common::IClock& clock, loggi
           .local_server = cfg.instance_name(),
           .default_retention_days = static_cast<int>(cfg.retention().default_days),
           .check_destination = destination_check(cfg),
+          .is_recipient = [&cfg](std::string_view user,
+                                 std::string_view target) { return cfg.is_member(user, target); },
           .on_committed = {},  // ForwardQueue::enqueue once forwarder exists
       });
 

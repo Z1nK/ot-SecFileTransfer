@@ -48,9 +48,12 @@ bool is_sender(const Caller& caller, const Transaction& tx) {
   return !caller.is_peer && tx.origin_server.empty() && caller.name == tx.sender;
 }
 
-// The user the transaction is addressed to, on this server.
-bool is_target(const Caller& caller, const Transaction& tx) {
-  return !caller.is_peer && tx.target_server.empty() && caller.name == tx.target_user;
+// The user the transaction is addressed to on this server, or a member of
+// the group it is addressed to.
+bool is_target(const Caller& caller, const Transaction& tx, const MembershipCheck& is_recipient) {
+  return !caller.is_peer && tx.target_server.empty()
+         && (caller.name == tx.target_user
+             || (is_recipient && is_recipient(caller.name, tx.target_user)));
 }
 
 // The peer that pushed the transaction here.
@@ -65,9 +68,9 @@ bool may_write(const Caller& caller, const Transaction& tx) {
 
 // Who may see metadata and files: the sender always, the target once the
 // sender has committed, the pushing peer.
-bool may_read(const Caller& caller, const Transaction& tx) {
-  return is_sender(caller, tx) || is_origin_peer(caller, tx) ||
-         (is_target(caller, tx) && tx.state != State::open);
+bool may_read(const Caller& caller, const Transaction& tx, const MembershipCheck& is_recipient) {
+  return is_sender(caller, tx) || is_origin_peer(caller, tx)
+         || (is_target(caller, tx, is_recipient) && tx.state != State::open);
 }
 
 void upsert_file(std::vector<FileEntry>& files, FileEntry entry) {
@@ -260,7 +263,7 @@ Result<Transaction> TransactionService::get(const Caller& caller,
   if (!tx) {
     return not_found(id);
   }
-  if (!may_read(caller, *tx)) {
+  if (!may_read(caller, *tx, options_.is_recipient)) {
     return forbidden(id);
   }
   return std::move(*tx);
@@ -274,7 +277,8 @@ std::vector<Transaction> TransactionService::list(const Caller& caller, Box box)
     if (box == Box::out) {
       return is_sender(caller, tx);
     }
-    return is_target(caller, tx) && (tx.state == State::committed || tx.state == State::delivered);
+    return is_target(caller, tx, options_.is_recipient)
+           && (tx.state == State::committed || tx.state == State::delivered);
   });
   std::ranges::sort(txs, [](const Transaction& a, const Transaction& b) {
     return a.created_at != b.created_at ? a.created_at > b.created_at : a.id < b.id;
@@ -289,7 +293,7 @@ Result<storage::Download> TransactionService::open_download(const Caller& caller
   if (!tx) {
     return not_found(id);
   }
-  if (!may_read(caller, *tx)) {
+  if (!may_read(caller, *tx, options_.is_recipient)) {
     return forbidden(id);
   }
   CFD_TRYV(require_readable(tx->state));

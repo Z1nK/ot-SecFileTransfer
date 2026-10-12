@@ -20,11 +20,17 @@ key = "/etc/confide/key.pem"
 [auth]
 token_ttl_s = 3600
 users_file = "users"             # `name:password_hash` per line, see users.example; chmod 600
+groups_file = "groups"           # optional, `name:member,member` per line, see groups.example
 
 # Users can also be listed here instead of (or as well as) in users_file:
 # [[user]]
 # name = "carol"
 # password_hash = "<hash>"       # from `confide-passwd`; plaintext `password` is rejected
+
+# Groups too, as well as or instead of groups_file:
+# [[group]]
+# name = "ops"
+# members = ["carol"]
 
 [log]
 level = "info"                   # trace | debug | info | warn | error

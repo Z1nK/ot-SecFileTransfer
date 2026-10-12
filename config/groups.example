@@ -1,0 +1,6 @@
+# Groups of this server, one per line: name:member,member,...
+# Send to a group with `ftc send --to devs` (or `devs@siteA` from another server):
+# every member sees the transaction in their inbox.
+# Members must be users from the users file; a group can't have a user's name.
+devs:alice,bob
+ops:

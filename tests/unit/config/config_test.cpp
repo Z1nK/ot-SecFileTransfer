@@ -310,3 +310,74 @@ TEST(ConfigLoader, UsersFileEmptyWarnsNobodyCanLogIn) {
   ASSERT_TRUE(cfg.has_value()) << cfg.error().detail;
   EXPECT_TRUE(has_warning(*cfg, "no users configured"));
 }
+
+namespace {
+
+// UsersFixture plus a groups file, pointed to by auth.groups_file.
+struct GroupsFixture : UsersFixture {
+  fs::path groups = dir / "groups";
+
+  explicit GroupsFixture(std::string_view groups_text, std::string_view extra_toml = "")
+      : UsersFixture("alice:h1\nbob:h2\ncarol:h3\n",
+                     std::string("groups_file = \"groups\"\n") + std::string(extra_toml)) {
+    std::ofstream(groups) << groups_text;
+  }
+};
+
+}  // namespace
+
+TEST(ConfigLoader, GroupsFileLoads) {
+  GroupsFixture f("# name:member,...\n\ndevs: alice , bob\r\n  ops:carol\nempty:\n");
+  auto cfg = ConfigLoader::from_file(f.config);
+  ASSERT_TRUE(cfg.has_value()) << cfg.error().detail;
+  EXPECT_EQ(cfg->auth().groups_file, fs::absolute(f.groups));
+  ASSERT_EQ(cfg->auth().groups.size(), 3U);
+  ASSERT_NE(cfg->find_group("devs"), nullptr);
+  EXPECT_EQ(cfg->find_group("devs")->members, (std::vector<std::string>{"alice", "bob"}));
+  ASSERT_NE(cfg->find_group("empty"), nullptr);
+  EXPECT_TRUE(cfg->find_group("empty")->members.empty());
+  EXPECT_EQ(cfg->find_group("alice"), nullptr);
+
+  EXPECT_TRUE(cfg->is_member("alice", "devs"));
+  EXPECT_TRUE(cfg->is_member("carol", "ops"));
+  EXPECT_FALSE(cfg->is_member("carol", "devs"));
+  EXPECT_FALSE(cfg->is_member("alice", "nosuch"));
+  EXPECT_FALSE(cfg->is_member("alice", "alice"));
+}
+
+TEST(ConfigLoader, GroupsFileMergesWithInlineGroups) {
+  GroupsFixture f("devs:alice\n", "[[group]]\nname = \"ops\"\nmembers = [\"bob\", \"carol\"]\n");
+  auto cfg = ConfigLoader::from_file(f.config);
+  ASSERT_TRUE(cfg.has_value()) << cfg.error().detail;
+  EXPECT_EQ(cfg->auth().groups.size(), 2U);
+  EXPECT_TRUE(cfg->is_member("alice", "devs"));
+  EXPECT_TRUE(cfg->is_member("carol", "ops"));
+}
+
+TEST(ConfigLoader, GroupsFileRules) {
+  auto expect_bad = [](std::string_view groups, std::string_view extra, std::string_view part) {
+    GroupsFixture f(groups, extra);
+    auto cfg = ConfigLoader::from_file(f.config);
+    ASSERT_FALSE(cfg.has_value()) << groups;
+    EXPECT_EQ(cfg.error().code, ErrCode::validation);
+    EXPECT_NE(cfg.error().detail.find(part), std::string::npos) << cfg.error().detail;
+  };
+  expect_bad("devs:alice\nops\n", "", "groups:2: expected 'name:member,member,...'");
+  expect_bad("d@v:alice\n", "", "groups:1.name");
+  expect_bad("devs:alice\ndevs:bob\n", "", "duplicate group");
+  expect_bad("alice:bob\n", "", "already a user name");
+  expect_bad("devs:alice,dave\n", "", "'dave' is not a configured user");
+  expect_bad("devs:alice,,bob\n", "", "'' is not a configured user");
+  expect_bad("devs:alice,bob,alice\n", "", "'alice' is listed twice");
+  expect_bad("devs:alice\n", "[[group]]\nname = \"devs\"\n", "duplicate group");
+  expect_bad("", "[[group]]\nname = \"ops\"\nmembers = \"bob\"\n", "expected an array of strings");
+}
+
+TEST(ConfigLoader, GroupsFileMissingIsIo) {
+  GroupsFixture f("devs:alice\n");
+  fs::remove(f.groups);
+  auto cfg = ConfigLoader::from_file(f.config);
+  ASSERT_FALSE(cfg.has_value());
+  EXPECT_EQ(cfg.error().code, ErrCode::io);
+  EXPECT_NE(cfg.error().detail.find("auth.groups_file"), std::string::npos);
+}

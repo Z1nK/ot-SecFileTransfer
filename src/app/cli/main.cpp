@@ -436,8 +436,9 @@ int run_command(const std::string& command, const std::vector<std::string>& args
   Result<void> (*run)(const Global&, const po::variables_map&) = nullptr;
 
   if (command == "send") {
-    desc.add_options()("to,t", po::value<std::string>()->required()->value_name("USER[@SERVER]"),
-                       "receiver; without @SERVER a user on the same server")(
+    desc.add_options()("to,t",
+                       po::value<std::string>()->required()->value_name("USER|GROUP[@SERVER]"),
+                       "receiver, a user or a group; without @SERVER one on the same server")(
         "retention,r", po::value<int>()->value_name("DAYS"),
         "days to keep the transaction (server default if not set)");
     hidden.add_options()("path", po::value<std::vector<std::string>>()->required());
