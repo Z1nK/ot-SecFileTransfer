@@ -3,6 +3,7 @@ add_executable(${LOCAL_EXE_NAME})
 
 target_sources(${LOCAL_EXE_NAME} PRIVATE
   http_client.cpp
+  token_cache.cpp
   main.cpp
 )
 
