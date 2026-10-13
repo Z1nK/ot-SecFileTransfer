@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 
 # Release builds get the version from the git tag: CI turns tag vX.Y.Z into
 # -DAPP_VERSION=X.Y.Z. Local builds keep the 0.0.0 default.
-set(APP_VERSION "0.1.0" CACHE STRING "Application version X.Y.Z, set by CI from the git tag")
+set(APP_VERSION "0.1.1" CACHE STRING "Application version X.Y.Z, set by CI from the git tag")
 if(NOT APP_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
   message(FATAL_ERROR "APP_VERSION '${APP_VERSION}' is not X.Y.Z")
 endif()
