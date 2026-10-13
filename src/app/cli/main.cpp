@@ -1,12 +1,13 @@
 // `ftc`: command-line client for the REST API (Architecture §2, §4 `client`).
 //
-//   ftc -s http://siteA:8080 -u alice send --to bob@siteB ~/data/report
-//   ftc -s http://siteB:8080 -u bob inbox
-//   ftc -s http://siteB:8080 -u bob get <id> ~/downloads
+//   ftc -s https://siteA:8080 -u alice send --to bob@siteB ~/data/report
+//   ftc -s https://siteB:8080 -u bob inbox
+//   ftc -s https://siteB:8080 -u bob get <id> ~/downloads
 //
-// The password comes from FTC_PASSWORD, or is asked for on the terminal
-// (first line of stdin if stdin is not a terminal), so it never appears in
-// `ps` or the shell history.
+// The password comes from FTC_PASSWORD (development only), or is asked for
+// on the terminal (first line of stdin if stdin is not a terminal), so it
+// never appears in `ps`. An http:// server needs --allow-http, since Basic
+// auth would send the password unencrypted.
 
 #include "http_client.hpp"
 

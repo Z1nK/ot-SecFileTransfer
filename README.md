@@ -285,14 +285,19 @@ with its SHA-256 and commits. `ftc get` downloads all files of a transaction and
 each SHA-256 before it keeps the file.
 
 The server comes from `-s` / `FTC_SERVER`, the user from `-u` / `FTC_USER`. The password
-is read from `FTC_PASSWORD`, or asked for on the terminal.
+is asked for on the terminal without echo, or read from `FTC_PASSWORD` (development only:
+other processes of the same user can read the environment).
+
+ftc refuses a plain `http://` server, since Basic auth would send the password
+unencrypted. For local testing against a server with `[tls] enabled = false`, add
+`--allow-http`, as below.
 
 ```bash
 export FTC_SERVER=http://127.0.0.1:8080
 
 # 1-3. alice sends the folder report/ (holds a.txt) to bob; a folder keeps its
 #      name, so the file arrives as report/a.txt
-build/bin/ftc -u alice send --to bob report/
+build/bin/ftc --allow-http -u alice send --to bob report/
 # password for alice:
 # created b3c18f72-... for bob
 #   report/a.txt
@@ -300,12 +305,12 @@ build/bin/ftc -u alice send --to bob report/
 ID=b3c18f72-...
 
 # 4. bob lists incoming transactions and their files
-build/bin/ftc -u bob inbox
-build/bin/ftc -u bob show $ID
-build/bin/ftc -u bob files $ID
+build/bin/ftc --allow-http -u bob inbox
+build/bin/ftc --allow-http -u bob show $ID
+build/bin/ftc --allow-http -u bob files $ID
 
 # 5. bob downloads into ./downloads (creates ./downloads/report/a.txt)
-build/bin/ftc -u bob get $ID downloads
+build/bin/ftc --allow-http -u bob get $ID downloads
 ```
 
 Notes:
