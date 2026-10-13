@@ -29,9 +29,35 @@ if(WITH_GOOGLE_TEST)
   add_subdirectory(tests)
 endif()
 
+# -----------------------------------------------------------------------------
+# Packaging: one .deb per install() COMPONENT
+#   server -> confide         (confide-server)
+#   utils  -> confide-utils   (confide-passwd)
+#   client -> confide-client  (ftc)
+# -----------------------------------------------------------------------------
 set(CPACK_GENERATOR DEB)
+set(CPACK_PACKAGE_NAME confide)
 set(CPACK_PACKAGE_VERSION_MAJOR "${PROJECT_VERSION_MAJOR}")
 set(CPACK_PACKAGE_VERSION_MINOR "${PROJECT_VERSION_MINOR}")
 set(CPACK_PACKAGE_VERSION_PATCH "${PROJECT_VERSION_PATCH}")
 set(CPACK_PACKAGE_CONTACT example@example.com)
+
+# Only these components are packaged; anything else installed (e.g. by
+# FetchContent'ed googletest) is left out.
+set(CPACK_COMPONENTS_ALL server utils client)
+set(CPACK_DEB_COMPONENT_INSTALL ON)
+
+set(CPACK_DEBIAN_SERVER_PACKAGE_NAME confide)
+set(CPACK_DEBIAN_UTILS_PACKAGE_NAME confide-utils)
+set(CPACK_DEBIAN_CLIENT_PACKAGE_NAME confide-client)
+
+set(CPACK_COMPONENT_SERVER_DESCRIPTION "Confide secure file transfer server")
+set(CPACK_COMPONENT_UTILS_DESCRIPTION "Confide administration tools (confide-passwd)")
+set(CPACK_COMPONENT_CLIENT_DESCRIPTION "Confide command line client (ftc)")
+
+# <name>_<version>_<arch>.deb, and Depends: filled from the linked shared
+# libraries (needs dpkg-shlibdeps).
+set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
+set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+
 include(CPack)
