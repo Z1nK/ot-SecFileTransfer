@@ -1,9 +1,13 @@
 cmake_minimum_required(VERSION 3.20)
 
-set(PATCH_VERSION "1" CACHE INTERNAL "Patch version")
-set(PROJECT_VERSION 0.0.${PATCH_VERSION})
+# Release builds get the version from the git tag: CI turns tag vX.Y.Z into
+# -DAPP_VERSION=X.Y.Z. Local builds keep the 0.0.0 default.
+set(APP_VERSION "0.0.0" CACHE STRING "Application version X.Y.Z, set by CI from the git tag")
+if(NOT APP_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
+  message(FATAL_ERROR "APP_VERSION '${APP_VERSION}' is not X.Y.Z")
+endif()
 
-project(SecFileTransfer VERSION ${PROJECT_VERSION})
+project(SecFileTransfer VERSION ${APP_VERSION})
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
