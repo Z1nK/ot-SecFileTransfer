@@ -70,11 +70,12 @@ jobs:
       - name: Create package
         run: cmake --build --preset ${{ env.CONFIGURE_PRESET }} --target package
 
-      - name: Upload .deb artifact
+      - name: Upload .deb artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: deb-package
-          path: ${{ env.BUILD_DIR }}/SecFileTransfer-${{ env.VERSION }}-Linux.deb
+          name: deb-packages
+          # confide, confide-utils and confide-client
+          path: ${{ env.BUILD_DIR }}/*_${{ env.VERSION }}_*.deb
           if-no-files-found: error
           retention-days: 1
 
@@ -85,10 +86,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Download .deb artifact
+      - name: Download .deb artifacts
         uses: actions/download-artifact@v4
         with:
-          name: deb-package
+          name: deb-packages
 
       - name: Create GitHub Release and upload asset
         env:
@@ -98,4 +99,4 @@ jobs:
             --repo ${{ github.repository }} \
             --title "Release ${GITHUB_REF_NAME#v}" \
             --generate-notes \
-            ./SecFileTransfer-*-Linux.deb
+            ./*.deb
