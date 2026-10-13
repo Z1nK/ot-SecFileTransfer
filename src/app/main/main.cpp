@@ -160,6 +160,10 @@ Result<void> serve(const config::Config& cfg, const common::IClock& clock, loggi
   });
 
   CFD_TRYV(server.start());
+  if (!tls) {
+    tlog.warn(kTag, "TLS is off ([tls] enabled = false): passwords travel unencrypted, "
+                    "use for local testing only");
+  }
   tlog.info(kTag, "{} listening on {}:{} ({})", cfg.instance_name(), cfg.rest().bind, server.port(),
             tls ? "https" : "http");
 
