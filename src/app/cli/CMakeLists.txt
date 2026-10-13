@@ -27,4 +27,4 @@ endif()
 
 # Installation
 
-install(TARGETS ${LOCAL_EXE_NAME} RUNTIME DESTINATION bin)
+install(TARGETS ${LOCAL_EXE_NAME} RUNTIME DESTINATION bin COMPONENT client)
