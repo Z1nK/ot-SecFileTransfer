@@ -208,6 +208,9 @@ int main(int argc, char** argv) {
       std::make_unique<logging::FileSink>(log_cfg.dir / "business.log", log_cfg.rotate_bytes),
       clock);
 
+  tlog.info(kTag, "confide-server {} starting, config {}", version::kProjectVersionString,
+            args[1]);
+
   for (const auto& w : cfg->warnings()) {
     tlog.warn(kTag, "config: {}", w);
   }
