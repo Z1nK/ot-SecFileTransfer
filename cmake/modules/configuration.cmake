@@ -74,3 +74,8 @@ endif()
 # -----------------------------------------------------------------------------
 
 configure_file(${OT_SEC_FILE_TRANSFER_PROJECT_DIR}/cmake/configs/version_constants.hpp.in ${OT_SEC_FILE_TRANSFER_AUTOGEN_DIR}/version_constants.hpp @ONLY)
+
+# Header-only target for the generated headers: #include <version_constants.hpp>
+add_library(confide_version INTERFACE)
+add_library(${PROJECT_NAMESPACE}::version ALIAS confide_version)
+target_include_directories(confide_version INTERFACE $<BUILD_INTERFACE:${OT_SEC_FILE_TRANSFER_AUTOGEN_DIR}>)
