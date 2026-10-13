@@ -17,6 +17,7 @@ target_sources(${LOCAL_EXE_NAME} PRIVATE main.cpp)
 target_link_libraries(${LOCAL_EXE_NAME} PRIVATE
   ${PROJECT_NAMESPACE}::api-static
   ${PROJECT_NAMESPACE}::auth-static
+  ${PROJECT_NAMESPACE}::version
 )
 
 if (MSVC)

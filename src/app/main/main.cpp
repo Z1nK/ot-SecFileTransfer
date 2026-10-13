@@ -22,6 +22,7 @@
 #include <storage/storage.hpp>
 #include <transaction/repository.hpp>
 #include <transaction/service.hpp>
+#include <version_constants.hpp>
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/signal_set.hpp>
