@@ -63,6 +63,11 @@ find_package(toml11 CONFIG REQUIRED)
 # Thread pool of the api server, TechLog writer thread.
 find_package(Threads REQUIRED)
 
+# LDAP authentication (ldapclient): OpenLDAP's libldap and liblber.
+if(WITH_LDAP)
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(OPENLDAP REQUIRED IMPORTED_TARGET ldap lber)
+endif()
 
 # -----------------------------------------------------------------------------
 # Generating config files

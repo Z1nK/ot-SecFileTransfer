@@ -5,3 +5,7 @@ add_subdirectory(auth)
 add_subdirectory(storage)
 add_subdirectory(transaction)
 add_subdirectory(api)
+
+if(WITH_LDAP)
+  add_subdirectory(ldapclient)
+endif()

@@ -12,6 +12,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(PROJECT_NAMESPACE confide)
 
 option(WITH_GOOGLE_TEST "Whether to build Google test" ON)
+option(WITH_LDAP "Whether to build LDAP authentication support (needs OpenLDAP)" ON)
 
 set(CMAKE_MODULE_PATH ${CMAKE_CURRENT_LIST_DIR}/cmake/modules)
 set(CMAKE_CONFIG_PATH ${CMAKE_CURRENT_LIST_DIR}/cmake/configs)
