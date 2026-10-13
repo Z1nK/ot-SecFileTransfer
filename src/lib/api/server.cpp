@@ -83,6 +83,13 @@ public:
 
   const RequestHeader& request() const override { return parser_.get().base(); }
 
+  // Client IP address, "" if the socket no longer knows it.
+  std::string remote_address() const {
+    boost::system::error_code ec;
+    const auto ep = beast::get_lowest_layer(stream_).socket().remote_endpoint(ec);
+    return ec ? std::string{} : ep.address().to_string();
+  }
+
   std::optional<std::uint64_t> content_length() const override {
     const auto len = parser_.content_length();
     if (!len) {
@@ -499,9 +506,23 @@ asio::awaitable<void> HttpServer::Impl::dispatch(SessionExchange<Stream>& ex) {
   }
 
   const Route& route = *match->route;
-  auto caller = route.access == Access::peer ? auth.authenticate_peer(req)
-                                             : auth.authenticate_user(req);
+  const std::string source = ex.remote_address();
+  auto caller = [&] {
+    switch (route.access) {
+    case Access::peer:
+      return auth.authenticate_peer(req);
+    case Access::password:
+      return auth.authenticate_password(req, source);
+    case Access::user:
+      break;
+    }
+    return auth.authenticate_user(req, source);
+  }();
   if (!caller) {
+    if (caller.error().code == ErrCode::throttled) {
+      tlog.warn(kTag, "{} {} from {}: {}", sv(req.method_string()), sv(req.target()), source,
+                caller.error().detail);
+    }
     auto res = Response::error(caller.error());
     if (caller.error().code == ErrCode::auth) {
       res.headers.emplace_back("WWW-Authenticate", route.access == Access::peer
