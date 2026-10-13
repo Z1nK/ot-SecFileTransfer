@@ -232,6 +232,8 @@ sequenceDiagram
 | POST | `/transactions/{id}/commit` | Make immutable |
 | GET | `/transactions/{id}/files` | List files with sizes and checksums |
 | GET | `/transactions/{id}/files/{path}` | Download a file (streamed) |
+| POST | `/auth/token` | Log in with Basic auth; returns a user token (Bearer) |
+| DELETE | `/auth/token` | Log out: revoke the presented user token |
 | POST/PUT | `/internal/transactions/...` | Server-to-server push (peer token only) |
 
 ## 9. On-Disk Layout
