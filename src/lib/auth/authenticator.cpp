@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
+#include <memory>
 #include <optional>
 
 namespace confide::auth {
@@ -48,7 +50,9 @@ bool same(const Sha256Digest& a, const Sha256Digest& b) {
 }  // namespace
 
 Result<Authenticator> Authenticator::create(const config::Config& cfg,
-                                           const IUserDirectory& directory) {
+                                            const IUserDirectory& directory,
+                                            const common::IClock& clock,
+                                            LoginLimiterOptions limits) {
   std::vector<Peer> peers;
   for (const auto& p : cfg.peers()) {
     if (p.accept_token.empty()) {
@@ -57,10 +61,23 @@ Result<Authenticator> Authenticator::create(const config::Config& cfg,
     CFD_TRY(digest, Sha256::of(p.accept_token));
     peers.push_back(Peer{.name = p.name, .token = digest});
   }
-  return Authenticator(directory, std::move(peers));
+  auto sessions = std::make_unique<SessionStore>(
+      clock, SessionOptions{.ttl = std::chrono::seconds{cfg.auth().token_ttl_s},
+                            .idle = std::chrono::seconds{cfg.auth().token_idle_s}});
+  return Authenticator(directory, std::move(peers), std::move(sessions),
+                       std::make_unique<LoginLimiter>(clock, limits));
 }
 
-Result<std::string> Authenticator::authenticate_user(std::string_view authorization) const {
+Result<std::string> Authenticator::authenticate_user(std::string_view authorization,
+                                                     std::string_view source) const {
+  if (const auto token = credentials(authorization, "Bearer")) {
+    return sessions_->verify(*token);
+  }
+  return authenticate_password(authorization, source);
+}
+
+Result<std::string> Authenticator::authenticate_password(std::string_view authorization,
+                                                         std::string_view source) const {
   if (authorization.empty()) {
     return denied("missing Authorization header");
   }
@@ -80,7 +97,25 @@ Result<std::string> Authenticator::authenticate_user(std::string_view authorizat
   const auto user = pair.substr(0, colon);
   const auto password = pair.substr(colon + 1);
 
-  return directory_->verify(user, password);
+  // Checked before the directory, so a throttled guess never reaches LDAP.
+  CFD_TRYV(limiter_->check(user, source));
+  auto name = directory_->verify(user, password);
+  if (name) {
+    limiter_->succeeded(user, source);
+  } else if (name.error().code == ErrCode::auth) {
+    limiter_->failed(user, source);
+  }
+  return name;
+}
+
+Result<IssuedToken> Authenticator::issue_token(std::string_view user) const {
+  return sessions_->issue(user);
+}
+
+void Authenticator::revoke_token(std::string_view authorization) const {
+  if (const auto token = credentials(authorization, "Bearer")) {
+    sessions_->revoke(*token);
+  }
 }
 
 Result<std::string> Authenticator::authenticate_peer(std::string_view authorization) const {
@@ -90,6 +125,9 @@ Result<std::string> Authenticator::authenticate_peer(std::string_view authorizat
   const auto token = credentials(authorization, "Bearer");
   if (!token || token->empty()) {
     return denied("expected Bearer peer token");
+  }
+  if (token->starts_with(SessionStore::kPrefix)) {
+    return denied("user tokens are not accepted from peers");
   }
   CFD_TRY(digest, Sha256::of(*token));
 
