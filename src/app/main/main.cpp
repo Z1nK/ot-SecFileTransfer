@@ -12,6 +12,7 @@
 #include <api/router.hpp>
 #include <api/server.hpp>
 #include <auth/authenticator.hpp>
+#include <auth/user_directory.hpp>
 #include <common/error.hpp>
 #include <common/time.hpp>
 #include <config/config.hpp>
@@ -56,13 +57,19 @@ std::string describe(const Error& err) {
   return std::format("[{}] {}", common::to_string(err.code), err.detail);
 }
 
-// FR-13: a local target must be a configured user or group, a remote one a
-// configured peer. Whether the user exists on the peer is only known when
-// forwarding.
-transaction::DestinationCheck destination_check(const config::Config& cfg) {
-  return [&cfg](std::string_view user, std::string_view server) -> Result<void> {
+// FR-13: a local target must be a known user or group of the user
+// directory, a remote one a configured peer. Whether the user exists on the
+// peer is only known when forwarding.
+transaction::DestinationCheck destination_check(const config::Config& cfg,
+                                                const auth::IUserDirectory& directory) {
+  return [&cfg, &directory](std::string_view user, std::string_view server) -> Result<void> {
     if (server.empty() || server == cfg.instance_name()) {
-      if (cfg.find_user(user) == nullptr && cfg.find_group(user) == nullptr) {
+      CFD_TRY(is_user, directory.has_user(user));
+      if (is_user) {
+        return {};
+      }
+      CFD_TRY(is_group, directory.has_group(user));
+      if (!is_group) {
         return std::unexpected(
             Error::make(ErrCode::unknown_destination,
                         std::format("no user or group '{}' on this server", user)));
@@ -108,6 +115,10 @@ Result<void> serve(const config::Config& cfg, const common::IClock& clock, loggi
                    logging::BusinessLog& blog) {
   CFD_TRY(store, storage::FileStore::open(cfg.storage().root));
 
+  // Local users or LDAP, per auth.provider. Owned here: the service and the
+  // authenticator only hold references.
+  CFD_TRY(directory, auth::make_directory(cfg, &tlog));
+
   transaction::TransactionRepository repo(store);
   CFD_TRYV(repo.load());
 
@@ -116,9 +127,10 @@ Result<void> serve(const config::Config& cfg, const common::IClock& clock, loggi
       transaction::ServiceOptions{
           .local_server = cfg.instance_name(),
           .default_retention_days = static_cast<int>(cfg.retention().default_days),
-          .check_destination = destination_check(cfg),
-          .is_recipient = [&cfg](std::string_view user,
-                                 std::string_view target) { return cfg.is_member(user, target); },
+          .check_destination = destination_check(cfg, *directory),
+          .is_recipient = [&dir = *directory](std::string_view user, std::string_view target) {
+            return dir.is_member(user, target);
+          },
           .on_committed = {},  // ForwardQueue::enqueue once forwarder exists
       });
 
@@ -126,7 +138,7 @@ Result<void> serve(const config::Config& cfg, const common::IClock& clock, loggi
   api::Router router;
   CFD_TRYV(handlers.register_routes(router));
 
-  CFD_TRY(users_and_peers, auth::Authenticator::create(cfg));
+  CFD_TRY(users_and_peers, auth::Authenticator::create(cfg, *directory));
   const HeaderAuthenticator authenticator(users_and_peers);
 
   CFD_TRY(options, api::ServerOptions::from_config(cfg));

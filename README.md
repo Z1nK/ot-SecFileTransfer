@@ -62,6 +62,11 @@ Both presets use the same directory `build/`. Binaries go to `build/bin/`:
 
 To build without tests, add `-DWITH_GOOGLE_TEST=OFF` to the configure command.
 
+LDAP login (`auth.provider = "ldap"`, see [server.example.toml](config/server.example.toml)) is
+optional: add `-DWITH_LDAP=ON` and install OpenLDAP (`sudo apt install libldap-dev`). A test
+directory runs with `docker compose -f docker/docker-compose.yml up -d`; its tests run with
+`CONFIDE_LDAP_TEST_URI=ldap://localhost:1389 ctest --test-dir build -R Ldap`.
+
 Optional: `cmake --install build` copies `confide-server` and `confide-passwd` to
 `install/bin/`, and `cd build && cpack` makes a `.deb` package.
 

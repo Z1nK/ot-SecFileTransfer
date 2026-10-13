@@ -15,6 +15,16 @@ namespace confide::config {
 
 using common::Result;
 
+// Names end up in routing (`bob@siteB`) and Basic auth (`user:pass`), so
+// keep them to a conservative charset: no '@', ':', '/', spaces. Applies to
+// instance, peer, user and group names, local or from LDAP.
+inline bool is_valid_name(std::string_view s) {
+  return !s.empty() && s.size() <= 64 && std::ranges::all_of(s, [](char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-'
+           || c == '_' || c == '.';
+  });
+}
+
 // Root of the on-disk layout: `<root>/tmp/` and `<root>/transactions/`
 struct StorageCfg {
   std::filesystem::path root;
@@ -50,6 +60,39 @@ struct GroupCfg {
   std::vector<std::string> members;
 };
 
+// Where users and groups come from: local files/blocks or an LDAP directory.
+// Exactly one is used.
+enum class AuthProvider : uint8_t { local, ldap };
+
+// `[auth.ldap]`, used with `provider = "ldap"`. Plain data: the config
+// library knows nothing about the LDAP client. Empty filters/attributes keep
+// the preset's default.
+struct LdapCfg {
+  std::string preset = "openldap";  // or "active_directory"
+  // ldap://host:389 or ldaps://host:636; several, space-separated = failover.
+  std::string uri;
+  bool start_tls = false;
+  bool tls_verify = true;  // false = accept any certificate (tests only)
+  std::filesystem::path ca_file{};
+  uint32_t timeout_s = 5;
+  // Service account for lookups; empty bind_dn = anonymous. The password
+  // comes from `bind_password` or is read from `bind_password_file`.
+  std::string bind_dn{};
+  std::string bind_password{};
+  std::filesystem::path bind_password_file{};
+  std::string user_base_dn{};
+  std::string user_filter{};  // with {username}
+  std::string username_attribute{};
+  // Empty group_base_dn = no groups.
+  std::string group_base_dn{};
+  std::string group_filter{};
+  std::string member_of_filter{};  // with {dn} / {username}
+  std::string group_name_attribute{};
+  // How long a verified password and looked-up users/groups are reused
+  // without asking the server again; 0 = always ask.
+  uint32_t cache_ttl_s = 300;
+};
+
 struct AuthCfg {
   // users from `users_file` and from `[[user]]` blocks, merged.
   std::vector<UserCfg> users;
@@ -60,6 +103,9 @@ struct AuthCfg {
   // group-like file with one `name:member,member,...` per line; empty = none.
   std::filesystem::path groups_file{};
   uint32_t token_ttl_s = 3600; // will try to implement tokens
+  AuthProvider provider = AuthProvider::local;
+  // Only used with provider = ldap; users/groups above stay empty then.
+  LdapCfg ldap{};
 };
 
 // `technical.log` and `business.log` are both written into `dir`.

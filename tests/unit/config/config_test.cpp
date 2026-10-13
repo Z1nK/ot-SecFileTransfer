@@ -381,3 +381,114 @@ TEST(ConfigLoader, GroupsFileMissingIsIo) {
   EXPECT_EQ(cfg.error().code, ErrCode::io);
   EXPECT_NE(cfg.error().detail.find("auth.groups_file"), std::string::npos);
 }
+
+namespace {
+
+constexpr std::string_view kLdap = R"(
+[auth]
+provider = "ldap"
+[auth.ldap]
+uri = "ldaps://ldap.example.org"
+user_base_dn = "ou=people,dc=example,dc=org"
+)";
+
+}  // namespace
+
+TEST(ConfigLoader, ProviderIsLocalByDefault) {
+  auto cfg = ConfigLoader::from_string(kMinimal);
+  ASSERT_TRUE(cfg.has_value()) << cfg.error().detail;
+  EXPECT_EQ(cfg->auth().provider, confide::config::AuthProvider::local);
+}
+
+TEST(ConfigLoader, LdapProvider) {
+  auto cfg = ConfigLoader::from_string(with(std::string(kLdap) + R"(
+bind_dn = "cn=reader,dc=example,dc=org"
+bind_password = "secret"
+group_base_dn = "ou=groups,dc=example,dc=org"
+cache_ttl_s = 60
+)"));
+  ASSERT_TRUE(cfg.has_value()) << cfg.error().detail;
+  const auto& auth = cfg->auth();
+  EXPECT_EQ(auth.provider, confide::config::AuthProvider::ldap);
+  EXPECT_EQ(auth.ldap.preset, "openldap");
+  EXPECT_EQ(auth.ldap.uri, "ldaps://ldap.example.org");
+  EXPECT_EQ(auth.ldap.user_base_dn, "ou=people,dc=example,dc=org");
+  EXPECT_EQ(auth.ldap.group_base_dn, "ou=groups,dc=example,dc=org");
+  EXPECT_EQ(auth.ldap.bind_password, "secret");
+  EXPECT_EQ(auth.ldap.cache_ttl_s, 60U);
+  EXPECT_TRUE(auth.ldap.tls_verify);
+  // No local users with LDAP, and no warning about it either.
+  EXPECT_FALSE(has_warning(*cfg, "no users"));
+}
+
+TEST(ConfigLoader, LdapRules) {
+  expect_invalid(with("[auth]\nprovider = \"kerberos\"\n"), "auth.provider");
+  expect_invalid(with("[auth]\nprovider = \"ldap\"\n"), "[auth.ldap] section is required");
+  expect_invalid(with("[auth]\nprovider = \"ldap\"\n[auth.ldap]\nuser_base_dn = \"x\"\n"),
+                 "auth.ldap.uri is required");
+  expect_invalid(with("[auth]\nprovider = \"ldap\"\n[auth.ldap]\nuri = \"ldaps://h\"\n"),
+                 "auth.ldap.user_base_dn is required");
+  expect_invalid(with(std::string(kLdap) + "preset = \"novell\"\n"), "auth.ldap.preset");
+  expect_invalid(with(std::string(kLdap) + "timeout_s = 0\n"), "auth.ldap.timeout_s");
+  expect_invalid(
+      with(std::string(kLdap) + "bind_password = \"a\"\nbind_password_file = \"/x\"\n"),
+      "not both");
+}
+
+TEST(ConfigLoader, LdapWarnings) {
+  auto cfg = ConfigLoader::from_string(with(R"(
+[auth]
+provider = "ldap"
+users_file = "users"
+[auth.ldap]
+uri = "ldap://ldap.example.org"
+user_base_dn = "ou=people,dc=example,dc=org"
+tls_verify = false
+[[user]]
+name = "alice"
+password_hash = "h1"
+[[group]]
+name = "ops"
+members = ["alice"]
+)"));
+  ASSERT_TRUE(cfg.has_value()) << cfg.error().detail;
+  // Local users are not loaded, even from a users_file that doesn't exist.
+  EXPECT_TRUE(cfg->auth().users.empty());
+  EXPECT_TRUE(cfg->auth().groups.empty());
+  EXPECT_TRUE(has_warning(*cfg, "[[user]]: ignored"));
+  EXPECT_TRUE(has_warning(*cfg, "[[group]]: ignored"));
+  EXPECT_TRUE(has_warning(*cfg, "tls_verify = false"));
+  EXPECT_TRUE(has_warning(*cfg, "cleartext"));
+}
+
+TEST(ConfigLoader, LdapSectionIgnoredWithLocal) {
+  auto cfg = ConfigLoader::from_string(with("[auth.ldap]\nuri = \"ldap://h\"\n"));
+  ASSERT_TRUE(cfg.has_value()) << cfg.error().detail;
+  EXPECT_TRUE(has_warning(*cfg, "[auth.ldap]: ignored"));
+}
+
+TEST(ConfigLoader, LdapBindPasswordFile) {
+  const fs::path dir = fs::temp_directory_path() / "confide_ldap_test";
+  fs::remove_all(dir);
+  fs::create_directories(dir);
+  const fs::path secret = dir / "ldap_bind";
+  std::ofstream(secret) << "s3cret\n";
+  fs::permissions(secret, fs::perms::owner_read | fs::perms::owner_write);
+  std::ofstream(dir / "server.toml") << kMinimal << kLdap << "bind_password_file = \"ldap_bind\"\n";
+
+  auto cfg = ConfigLoader::from_file(dir / "server.toml");
+  ASSERT_TRUE(cfg.has_value()) << cfg.error().detail;
+  EXPECT_EQ(cfg->auth().ldap.bind_password, "s3cret");
+  EXPECT_FALSE(has_warning(*cfg, "chmod 600"));
+
+  fs::permissions(secret, fs::perms::owner_read | fs::perms::group_read);
+  cfg = ConfigLoader::from_file(dir / "server.toml");
+  ASSERT_TRUE(cfg.has_value()) << cfg.error().detail;
+  EXPECT_TRUE(has_warning(*cfg, "chmod 600"));
+
+  fs::remove(secret);
+  cfg = ConfigLoader::from_file(dir / "server.toml");
+  ASSERT_FALSE(cfg.has_value());
+  EXPECT_EQ(cfg.error().code, ErrCode::io);
+  fs::remove_all(dir);
+}

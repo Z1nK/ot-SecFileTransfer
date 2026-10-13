@@ -38,6 +38,10 @@ private:
   Result<void> parse_rest(RestCfg& out);
   Result<void> parse_tls(TlsCfg& out);
   Result<void> parse_auth(AuthCfg& out);
+  Result<void> parse_ldap(const toml::value* auth, LdapCfg& out);
+  // Reads a one-secret file (e.g. a bind password) into `out`.
+  Result<void> read_secret(const std::filesystem::path& path, std::string_view key,
+                           std::string& out);
   // Reads `name:password_hash` lines from `path` into `out.users`.
   Result<void> parse_users_file(const std::filesystem::path& path,
                                 std::unordered_set<std::string>& seen, AuthCfg& out);

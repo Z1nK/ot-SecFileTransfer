@@ -6,7 +6,7 @@
 
 #include <algorithm>
 #include <cctype>
-#include <format>
+#include <optional>
 
 namespace confide::auth {
 
@@ -44,28 +44,10 @@ bool same(const Sha256Digest& a, const Sha256Digest& b) {
   return CRYPTO_memcmp(a.bytes().data(), b.bytes().data(), Sha256Digest::kSize) == 0;
 }
 
-// SHA-256(salt || password): the cache key of a verified password.
-Result<Sha256Digest> fingerprint(const PasswordHash& hash, std::string_view password) {
-  CFD_TRY(sha, Sha256::create());
-  CFD_TRYV(sha.update(common::ByteSpan(hash.salt())));
-  CFD_TRYV(sha.update(password));
-  return sha.finish();
-}
-
 }  // namespace
 
-Result<Authenticator> Authenticator::create(const config::Config& cfg) {
-  std::map<std::string, PasswordHash, std::less<>> users;
-  for (const auto& u : cfg.auth().users) {
-    auto hash = PasswordHash::parse(u.password_hash);
-    if (!hash) {
-      return std::unexpected(
-          Error::make(ErrCode::validation,
-                      std::format("user '{}': password_hash: {}", u.name, hash.error().detail)));
-    }
-    users.emplace(u.name, std::move(*hash));
-  }
-
+Result<Authenticator> Authenticator::create(const config::Config& cfg,
+                                           const IUserDirectory& directory) {
   std::vector<Peer> peers;
   for (const auto& p : cfg.peers()) {
     if (p.accept_token.empty()) {
@@ -74,12 +56,7 @@ Result<Authenticator> Authenticator::create(const config::Config& cfg) {
     CFD_TRY(digest, Sha256::of(p.accept_token));
     peers.push_back(Peer{.name = p.name, .token = digest});
   }
-
-  std::optional<PasswordHash> dummy;
-  if (!users.empty()) {
-    dummy = users.begin()->second;
-  }
-  return Authenticator(std::move(users), std::move(peers), std::move(dummy));
+  return Authenticator(directory, std::move(peers));
 }
 
 Result<std::string> Authenticator::authenticate_user(std::string_view authorization) const {
@@ -102,37 +79,7 @@ Result<std::string> Authenticator::authenticate_user(std::string_view authorizat
   const auto user = pair.substr(0, colon);
   const auto password = pair.substr(colon + 1);
 
-  const auto it = users_.find(user);
-  if (it == users_.end()) {
-    if (dummy_) {
-      (void)dummy_->verify(password);
-    }
-    return denied("invalid user name or password");
-  }
-  if (!check_password(user, it->second, password)) {
-    return denied("invalid user name or password");
-  }
-  return std::string(user);
-}
-
-bool Authenticator::check_password(std::string_view user, const PasswordHash& hash,
-                                   std::string_view password) const {
-  auto print = fingerprint(hash, password);
-  if (print) {
-    const std::lock_guard lock(cache_->mu);
-    const auto it = cache_->by_user.find(user);
-    if (it != cache_->by_user.end() && same(it->second, *print)) {
-      return true;
-    }
-  }
-  if (!hash.verify(password)) {
-    return false;
-  }
-  if (print) {
-    const std::lock_guard lock(cache_->mu);
-    cache_->by_user.insert_or_assign(std::string(user), *print);
-  }
-  return true;
+  return directory_->verify(user, password);
 }
 
 Result<std::string> Authenticator::authenticate_peer(std::string_view authorization) const {
