@@ -1,14 +1,11 @@
-#include "auth/base64.hpp"
+#include "common/base64.hpp"
 
 #include <algorithm>
 #include <cstdint>
 
-namespace confide::auth {
+namespace confide::common {
 
 namespace {
-
-using common::ErrCode;
-using common::Error;
 
 constexpr std::string_view kAlphabet =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -39,7 +36,7 @@ std::unexpected<Error> invalid(std::string detail) {
 
 }  // namespace
 
-std::string base64_encode(common::ByteSpan data) {
+std::string base64_encode(ByteSpan data) {
   std::string out;
   out.reserve((data.size() + 2) / 3 * 4);
   for (std::size_t i = 0; i < data.size(); i += 3) {
@@ -90,4 +87,4 @@ Result<std::vector<std::byte>> base64_decode(std::string_view text) {
   return out;
 }
 
-}  // namespace confide::auth
+}  // namespace confide::common

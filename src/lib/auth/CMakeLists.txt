@@ -2,7 +2,6 @@ set(LOCAL_LIB_NAME auth)
 
 add_library(${LOCAL_LIB_NAME} STATIC
   authenticator.cpp
-  base64.cpp
   local_directory.cpp
   password.cpp
   user_directory.cpp
