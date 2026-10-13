@@ -27,6 +27,8 @@ http::status status_for(ErrCode code) {
     return http::status::unprocessable_entity;
   case ErrCode::unavailable:
     return http::status::service_unavailable;
+  case ErrCode::throttled:
+    return http::status::too_many_requests;
   case ErrCode::io:
   case ErrCode::internal:
     return http::status::internal_server_error;

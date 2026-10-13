@@ -13,10 +13,9 @@ using confide::common::Result;
 namespace {
 
 constexpr ErrCode kAllCodes[] = {
-    ErrCode::validation, ErrCode::auth,      ErrCode::forbidden,
-    ErrCode::notfound,   ErrCode::conflict,  ErrCode::gone,
-    ErrCode::integrity,  ErrCode::unknown_destination,
-    ErrCode::unavailable, ErrCode::io,       ErrCode::internal,
+    ErrCode::validation,  ErrCode::auth,      ErrCode::forbidden, ErrCode::notfound,
+    ErrCode::conflict,    ErrCode::gone,      ErrCode::integrity, ErrCode::unknown_destination,
+    ErrCode::unavailable, ErrCode::throttled, ErrCode::io,        ErrCode::internal,
 };
 
 Result<int> ok_int(int v) {
@@ -53,6 +52,7 @@ TEST(ErrCodeToString, KnownNames) {
   EXPECT_EQ(to_string(ErrCode::validation), "validation");
   EXPECT_EQ(to_string(ErrCode::notfound), "notfound");
   EXPECT_EQ(to_string(ErrCode::unknown_destination), "unknown_destination");
+  EXPECT_EQ(to_string(ErrCode::throttled), "throttled");
   EXPECT_EQ(to_string(ErrCode::internal), "internal");
 }
 

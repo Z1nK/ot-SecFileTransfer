@@ -183,4 +183,13 @@ std::string encode_file(const transaction::FileEntry& file) {
   return json::serialize(file_object(file));
 }
 
+std::string encode_token(std::string_view token, std::string_view user,
+                         common::Timestamp expires_at) {
+  return json::serialize(json::object{
+      {"token", token},
+      {"user", user},
+      {"expires_at", common::format_iso8601(expires_at)},
+  });
+}
+
 }  // namespace confide::api
