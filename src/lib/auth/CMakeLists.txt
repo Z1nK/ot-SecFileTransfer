@@ -2,8 +2,10 @@ set(LOCAL_LIB_NAME auth)
 
 add_library(${LOCAL_LIB_NAME} STATIC
   authenticator.cpp
+  login_limiter.cpp
   local_directory.cpp
   password.cpp
+  session_store.cpp
   user_directory.cpp
 )
 
