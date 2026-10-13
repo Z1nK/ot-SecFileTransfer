@@ -1,0 +1,24 @@
+services:
+  openldap:
+    image: osixia/openldap:1.5.0
+    container_name: ldap-test
+    # --copy-service copies the mounted LDIFs into the container so the
+    # bootstrap step can process them (the mount itself is read-only).
+    command: --copy-service
+    environment:
+      LDAP_ORGANISATION: "Example Org"
+      LDAP_DOMAIN: "example.org"            # -> base DN dc=example,dc=org
+      LDAP_ADMIN_PASSWORD: "adminpassword"  # -> cn=admin,dc=example,dc=org
+      LDAP_TLS: "true"                      # self-signed cert, enables StartTLS
+      LDAP_TLS_VERIFY_CLIENT: "never"
+    ports:
+      - "1389:389"   # ldap:// (+ StartTLS)
+      - "1636:636"   # ldaps://
+    volumes:
+      - ./ldif:/container/service/slapd/assets/config/bootstrap/ldif/custom:ro
+    healthcheck:
+      test: ["CMD", "ldapsearch", "-x", "-H", "ldap://localhost", "-b", "dc=example,dc=org",
+             "-D", "cn=admin,dc=example,dc=org", "-w", "adminpassword", "-s", "base"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
