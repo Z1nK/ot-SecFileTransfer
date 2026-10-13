@@ -159,15 +159,8 @@ Result<std::string> read_password(std::string_view user) {
   if (isatty(STDIN_FILENO) == 0) {
     std::getline(std::cin, password);
   } else {
-    std::cerr << "password for " << user << ": " << std::flush;
-    termios old{};
-    tcgetattr(STDIN_FILENO, &old);
-    termios quiet = old;
-    quiet.c_lflag &= ~static_cast<tcflag_t>(ECHO);
-    tcsetattr(STDIN_FILENO, TCSANOW, &quiet);
-    std::getline(std::cin, password);
-    tcsetattr(STDIN_FILENO, TCSANOW, &old);
-    std::cerr << '\n';
+    CFD_TRY(line, read_hidden(std::format("password for {}: ", user)));
+    password = std::move(line);
   }
   if (password.ends_with('\r')) {
     password.pop_back();
