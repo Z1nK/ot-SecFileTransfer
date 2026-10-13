@@ -4,17 +4,22 @@
 //   ftc -s https://siteB:8080 -u bob inbox
 //   ftc -s https://siteB:8080 -u bob get <id> ~/downloads
 //
-// The password comes from FTC_PASSWORD (development only), or is asked for
-// on the terminal (first line of stdin if stdin is not a terminal), so it
-// never appears in `ps`. An http:// server needs --allow-http, since Basic
-// auth would send the password unencrypted.
+// The first command (or `ftc login`) asks for the password and trades it for
+// a token (POST /auth/token), kept in a private file (cli::TokenCache).
+// Later commands send only the token; when it expires, ftc asks again. The
+// password comes from FTC_PASSWORD (development only), or is asked for on
+// the terminal (first line of stdin if stdin is not a terminal), so it
+// never appears in `ps`. An http:// server needs --allow-http, since the
+// password and token would travel unencrypted.
 
 #include "http_client.hpp"
+#include "token_cache.hpp"
 
 #include <common/error.hpp>
 #include <common/id.hpp>
 #include <common/path_sanitizer.hpp>
 #include <common/sha256.hpp>
+#include <openssl/crypto.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -59,6 +64,9 @@ constexpr int kExitUsage = 2;
 constexpr std::size_t kHashChunkBytes = std::size_t{1} << 20;
 
 constexpr std::string_view kCommands = R"(Commands:
+  login                 ask for the password and save a token for later
+                        commands (any command logs in first if needed)
+  logout                end the session on the server and delete the token
   send --to USER[@SERVER] [--retention DAYS] PATH...
                         create a transaction, upload the files and folders,
                         commit
@@ -172,7 +180,33 @@ Result<std::string> read_password(std::string_view user) {
   return password;
 }
 
-Result<HttpClient> connect(const Global& global) {
+// A password can be had without reading stdin, which may carry other data
+// by then: re-login after the token expired is only tried then.
+bool can_ask_password() {
+  return std::getenv("FTC_PASSWORD") != nullptr  // NOLINT(concurrency-mt-unsafe)
+         || isatty(STDIN_FILENO) != 0;
+}
+
+// Asks for the password, trades it for a token and saves the token.
+Result<cli::Login> login(HttpClient& client, const std::string& user,
+                         const cli::TokenCache& cache) {
+  CFD_TRY(password, read_password(user));
+  auto reply = client.login({.user = user, .password = password});
+  OPENSSL_cleanse(password.data(), password.size());
+  if (!reply) {
+    return std::unexpected(std::move(reply).error());
+  }
+  CFD_TRYV(cache.save(reply->token));
+  return reply;
+}
+
+// Client and token file for --server and --user, with no token set yet.
+struct Session {
+  HttpClient client;
+  cli::TokenCache cache;
+};
+
+Result<Session> open_session(const Global& global) {
   if (global.server.empty()) {
     return fail(ErrCode::validation, "no server: use --server or FTC_SERVER");
   }
@@ -180,19 +214,39 @@ Result<HttpClient> connect(const Global& global) {
     return fail(ErrCode::validation, "no user: use --user or FTC_USER");
   }
   CFD_TRY(url, cli::ServerUrl::parse(global.server));
-  // Basic auth sends the password with every request; without TLS anyone on
-  // the network can read it. Checked before the password is asked for.
+  // Without TLS anyone on the network can read the password and the token.
+  // Checked before the password is asked for.
   if (!url.tls) {
     if (!global.allow_http) {
       return fail(ErrCode::validation,
-                  "refusing to send the password over plain http: use an https:// URL "
+                  "refusing to send credentials over plain http: use an https:// URL "
                   "(or --allow-http for local testing)");
     }
-    std::cerr << "ftc: warning: plain http, the password is sent unencrypted\n";
+    std::cerr << "ftc: warning: plain http, the password and token are sent unencrypted\n";
   }
-  CFD_TRY(password, read_password(global.user));
-  return HttpClient::create(std::move(url), {.user = global.user, .password = std::move(password)},
-                            global.ca_file);
+  CFD_TRY(cache, cli::TokenCache::for_server(url, global.user));
+  CFD_TRY(client, HttpClient::create(std::move(url), global.ca_file));
+  return Session{.client = std::move(client), .cache = std::move(cache)};
+}
+
+// A client that sends the saved token, or logs in first if there is none.
+Result<HttpClient> connect(const Global& global) {
+  CFD_TRY(session, open_session(global));
+  auto& [client, cache] = session;
+  CFD_TRY(saved, cache.load());
+  if (saved) {
+    client.set_token(*saved);
+  } else {
+    CFD_TRYV(login(client, global.user, cache));
+  }
+  if (can_ask_password()) {
+    client.on_expired([user = global.user, cache](HttpClient& c) -> Result<std::string> {
+      std::cerr << "ftc: session expired, log in again\n";
+      CFD_TRY(reply, login(c, user, cache));
+      return reply.token;
+    });
+  }
+  return std::move(client);
 }
 
 // --- JSON replies -----------------------------------------------------------
@@ -457,6 +511,33 @@ Result<void> cmd_get(const Global& global, const po::variables_map& vm) {
   return {};
 }
 
+Result<void> cmd_login(const Global& global, const po::variables_map& /*vm*/) {
+  CFD_TRY(session, open_session(global));
+  CFD_TRY(reply, login(session.client, global.user, session.cache));
+  std::cout << "logged in as " << reply.user << " until " << reply.expires_at << '\n';
+  return {};
+}
+
+Result<void> cmd_logout(const Global& global, const po::variables_map& /*vm*/) {
+  CFD_TRY(session, open_session(global));
+  CFD_TRY(saved, session.cache.load());
+  if (!saved) {
+    std::cout << "not logged in\n";
+    return {};
+  }
+  session.client.set_token(*saved);
+  auto revoked = session.client.logout();
+  // The local copy goes in any case; an expired token is gone on the server
+  // already.
+  CFD_TRYV(session.cache.remove());
+  if (!revoked && revoked.error().code != ErrCode::auth) {
+    std::cerr << "ftc: warning: server not told (" << describe(revoked.error())
+              << "); the token stays valid there until it expires\n";
+  }
+  std::cout << "logged out\n";
+  return {};
+}
+
 // --- Dispatch ---------------------------------------------------------------
 
 void usage(const po::options_description& global) {
@@ -493,6 +574,10 @@ int run_command(const std::string& command, const std::vector<std::string>& args
     hidden.add_options()("path", po::value<std::vector<std::string>>()->required());
     pos.add("path", -1);
     run = cmd_send;
+  } else if (command == "login") {
+    run = cmd_login;
+  } else if (command == "logout") {
+    run = cmd_logout;
   } else if (command == "inbox") {
     run = [](const Global& g, const po::variables_map&) { return cmd_list(g, "in"); };
   } else if (command == "outbox") {
@@ -529,6 +614,9 @@ int run_command(const std::string& command, const std::vector<std::string>& args
 
   if (auto res = run(global, vm); !res) {
     std::cerr << "ftc " << command << ": " << describe(res.error()) << '\n';
+    if (res.error().code == ErrCode::auth && command != "login" && !can_ask_password()) {
+      std::cerr << "ftc: the session may have expired; run 'ftc login'\n";
+    }
     return kExitFailed;
   }
   return kExitOk;
