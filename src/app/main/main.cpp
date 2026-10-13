@@ -49,8 +49,11 @@ using common::Result;
 
 constexpr std::string_view kTag = "main";
 
-void usage(std::string_view prog) {
-  std::cerr << "usage: " << prog << " <config.toml>\n";
+void usage(std::ostream& out, std::string_view prog) {
+  out << "confide-server " << version::kProjectVersionString << "\n"
+      << "usage: " << prog << " <config.toml>\n"
+      << "       " << prog << " -h|--help\n"
+      << "       " << prog << " -v|--version\n";
 }
 
 // "[code] detail", for stderr and the technical log.
@@ -170,10 +173,16 @@ Result<void> serve(const config::Config& cfg, const common::IClock& clock, loggi
 
 int main(int argc, char** argv) {
   const std::span args(argv, static_cast<std::size_t>(argc));
-  if (args.size() != 2 || std::string_view(args[1]) == "-h"
-      || std::string_view(args[1]) == "--help") {
-    usage(args[0]);
+  if (args.size() != 2) {
+    usage(std::cerr, args[0]);
     return 2;
+  }
+  if (const std::string_view arg = args[1]; arg == "-h" || arg == "--help") {
+    usage(std::cout, args[0]);
+    return 0;
+  } else if (arg == "-v" || arg == "--version") {
+    std::cout << "confide-server " << version::kProjectVersionString << '\n';
+    return 0;
   }
 
   auto cfg = config::ConfigLoader::from_file(args[1]);
