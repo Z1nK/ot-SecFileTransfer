@@ -1,6 +1,6 @@
 #include "auth/authenticator.hpp"
 
-#include "auth/base64.hpp"
+#include "common/base64.hpp"
 
 #include <openssl/crypto.h>
 
@@ -14,6 +14,7 @@ namespace {
 
 using common::ErrCode;
 using common::Error;
+using common::base64_decode;
 using common::Sha256;
 using common::Sha256Digest;
 

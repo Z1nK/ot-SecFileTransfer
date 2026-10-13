@@ -1,6 +1,6 @@
 #include "http_client.hpp"
 
-#include <auth/base64.hpp>
+#include <common/base64.hpp>
 
 #include <boost/asio/connect.hpp>
 #include <boost/asio/io_context.hpp>
@@ -229,7 +229,7 @@ Result<HttpClient> HttpClient::create(ServerUrl url, const Credentials& creds,
   auto impl = std::make_unique<Impl>();
   const std::string pair = creds.user + ":" + creds.password;
   impl->authorization = "Basic "
-                        + auth::base64_encode(common::ByteSpan{
+                        + common::base64_encode(common::ByteSpan{
                             reinterpret_cast<const std::byte*>(pair.data()),  // NOLINT
                             pair.size()});
 

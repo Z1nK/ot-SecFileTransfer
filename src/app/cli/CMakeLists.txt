@@ -6,11 +6,10 @@ target_sources(${LOCAL_EXE_NAME} PRIVATE
   main.cpp
 )
 
-# common: ids, path checks, SHA-256; auth: base64 for Basic credentials.
+# common: ids, path checks, SHA-256, base64 for Basic credentials.
 # Beast/Asio are header-only (Boost::headers), TLS needs OpenSSL::SSL.
 target_link_libraries(${LOCAL_EXE_NAME} PRIVATE
   ${PROJECT_NAMESPACE}::common-static
-  ${PROJECT_NAMESPACE}::auth-static
   Boost::headers
   Boost::json
   Boost::program_options

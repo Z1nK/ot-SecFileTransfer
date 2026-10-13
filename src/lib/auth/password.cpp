@@ -1,6 +1,6 @@
 #include "auth/password.hpp"
 
-#include "auth/base64.hpp"
+#include "common/base64.hpp"
 
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
@@ -15,6 +15,8 @@ namespace {
 
 using common::ErrCode;
 using common::Error;
+using common::base64_decode;
+using common::base64_encode;
 
 std::unexpected<Error> invalid(std::string detail) {
   return std::unexpected(Error::make(ErrCode::validation, std::move(detail)));
