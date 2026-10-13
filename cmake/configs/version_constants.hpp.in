@@ -1,15 +1,18 @@
 #pragma once
 
-//! Automatically generated from version_constants.h.in. Should be used via API provided by
-//! /version.h
+//! Automatically generated from cmake/configs/version_constants.hpp.in by
+//! cmake/modules/configuration.cmake. Do not edit the generated copy.
+//! Link against confide::version to get it on the include path.
 
-#include <string>
+#include <string_view>
 
-namespace {
+namespace confide::version {
 
-const int kProjectVersionMajor = @PROJECT_VERSION_MAJOR @;
-const int kProjectVersionMinor = @PROJECT_VERSION_MINOR @;
-const int kProjectVersionPatch = @PROJECT_VERSION_PATCH @;
-const std::string kProjectVersionString = "@PROJECT_VERSION@";
+// clang-format off
+inline constexpr int kProjectVersionMajor = @PROJECT_VERSION_MAJOR@;
+inline constexpr int kProjectVersionMinor = @PROJECT_VERSION_MINOR@;
+inline constexpr int kProjectVersionPatch = @PROJECT_VERSION_PATCH@;
+inline constexpr std::string_view kProjectVersionString = "@PROJECT_VERSION@";
+// clang-format on
 
-}  // namespace
+}  // namespace confide::version
