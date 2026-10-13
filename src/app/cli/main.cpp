@@ -179,6 +179,16 @@ Result<HttpClient> connect(const Global& global) {
     return fail(ErrCode::validation, "no user: use --user or FTC_USER");
   }
   CFD_TRY(url, cli::ServerUrl::parse(global.server));
+  // Basic auth sends the password with every request; without TLS anyone on
+  // the network can read it. Checked before the password is asked for.
+  if (!url.tls) {
+    if (!global.allow_http) {
+      return fail(ErrCode::validation,
+                  "refusing to send the password over plain http: use an https:// URL "
+                  "(or --allow-http for local testing)");
+    }
+    std::cerr << "ftc: warning: plain http, the password is sent unencrypted\n";
+  }
   CFD_TRY(password, read_password(global.user));
   return HttpClient::create(std::move(url), {.user = global.user, .password = std::move(password)},
                             global.ca_file);
@@ -532,7 +542,9 @@ int main(int argc, char** argv) {
       "server, e.g. https://siteA:8080 (env FTC_SERVER)")(
       "user,u", po::value<std::string>()->value_name("NAME"), "user name (env FTC_USER)")(
       "ca-file", po::value<std::string>()->value_name("PATH"),
-      "PEM CA bundle for https (env FTC_CA_FILE; default: system CAs)");
+      "PEM CA bundle for https (env FTC_CA_FILE; default: system CAs)")(
+      "allow-http", "allow a plain http:// server; the password is sent unencrypted "
+                    "(local testing only)");
   po::options_description hidden;
   hidden.add_options()("command", po::value<std::string>())("args",
                                                             po::value<std::vector<std::string>>());
@@ -593,6 +605,7 @@ int main(int argc, char** argv) {
       .ca_file = vm.contains("ca-file") && !vm["ca-file"].as<std::string>().empty()
                      ? std::optional<fs::path>{vm["ca-file"].as<std::string>()}
                      : std::nullopt,
+      .allow_http = vm.contains("allow-http"),
   };
   return run_command(vm["command"].as<std::string>(), args, g);
 }
