@@ -1,6 +1,5 @@
 set(AUTH_TEST_SOURCES
   authenticator_test.cpp
-  base64_test.cpp
   local_directory_test.cpp
   password_test.cpp
 )

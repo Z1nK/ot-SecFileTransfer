@@ -1,6 +1,6 @@
 #include <auth/authenticator.hpp>
 #include <auth/local_directory.hpp>
-#include <auth/base64.hpp>
+#include <common/base64.hpp>
 #include <auth/password.hpp>
 #include <config/config.hpp>
 #include <gtest/gtest.h>
@@ -10,7 +10,7 @@
 #include <string_view>
 
 using confide::auth::Authenticator;
-using confide::auth::base64_encode;
+using confide::common::base64_encode;
 using confide::auth::IUserDirectory;
 using confide::auth::LocalDirectory;
 using confide::auth::PasswordHash;
