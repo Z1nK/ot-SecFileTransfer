@@ -50,7 +50,8 @@ endif()
 # Boost.JSON: meta.json / manifest.json in transaction, request bodies in api.
 # Boost.Beast / Boost.Asio (api, net) are header-only -> Boost::headers;
 # 1.83+ for asio::as_tuple with C++20 coroutines.
-find_package(Boost 1.83 REQUIRED COMPONENTS json)
+# Boost.ProgramOptions: command line of the ftc client.
+find_package(Boost 1.83 REQUIRED COMPONENTS json program_options)
 if(NOT Boost_FOUND)
   message(FATAL_ERROR "Boost library not found")
 endif()
@@ -62,9 +63,19 @@ find_package(toml11 CONFIG REQUIRED)
 # Thread pool of the api server, TechLog writer thread.
 find_package(Threads REQUIRED)
 
+# LDAP authentication (ldapclient): OpenLDAP's libldap and liblber.
+if(WITH_LDAP)
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(OPENLDAP REQUIRED IMPORTED_TARGET ldap lber)
+endif()
 
 # -----------------------------------------------------------------------------
 # Generating config files
 # -----------------------------------------------------------------------------
 
 configure_file(${OT_SEC_FILE_TRANSFER_PROJECT_DIR}/cmake/configs/version_constants.hpp.in ${OT_SEC_FILE_TRANSFER_AUTOGEN_DIR}/version_constants.hpp @ONLY)
+
+# Header-only target for the generated headers: #include <version_constants.hpp>
+add_library(confide_version INTERFACE)
+add_library(${PROJECT_NAMESPACE}::version ALIAS confide_version)
+target_include_directories(confide_version INTERFACE $<BUILD_INTERFACE:${OT_SEC_FILE_TRANSFER_AUTOGEN_DIR}>)

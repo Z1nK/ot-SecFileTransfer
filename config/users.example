@@ -1,0 +1,6 @@
+# Users of this server, one per line: name:password_hash
+# Make a line with:
+#   read -rs PW && printf '%s\n' "$PW" | confide-passwd --user alice >> users
+# Keep this file private: chmod 600 users
+alice:<hash>
+bob:<hash>

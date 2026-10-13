@@ -12,6 +12,7 @@
 #include <api/router.hpp>
 #include <api/server.hpp>
 #include <auth/authenticator.hpp>
+#include <auth/user_directory.hpp>
 #include <common/error.hpp>
 #include <common/time.hpp>
 #include <config/config.hpp>
@@ -21,6 +22,7 @@
 #include <storage/storage.hpp>
 #include <transaction/repository.hpp>
 #include <transaction/service.hpp>
+#include <version_constants.hpp>
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/signal_set.hpp>
@@ -47,8 +49,11 @@ using common::Result;
 
 constexpr std::string_view kTag = "main";
 
-void usage(std::string_view prog) {
-  std::cerr << "usage: " << prog << " <config.toml>\n";
+void usage(std::ostream& out, std::string_view prog) {
+  out << "confide-server " << version::kProjectVersionString << "\n"
+      << "usage: " << prog << " <config.toml>\n"
+      << "       " << prog << " -h|--help\n"
+      << "       " << prog << " -v|--version\n";
 }
 
 // "[code] detail", for stderr and the technical log.
@@ -56,14 +61,22 @@ std::string describe(const Error& err) {
   return std::format("[{}] {}", common::to_string(err.code), err.detail);
 }
 
-// FR-13: a local target must be a configured user, a remote one a configured
-// peer. Whether the user exists on the peer is only known when forwarding.
-transaction::DestinationCheck destination_check(const config::Config& cfg) {
-  return [&cfg](std::string_view user, std::string_view server) -> Result<void> {
+// FR-13: a local target must be a known user or group of the user
+// directory, a remote one a configured peer. Whether the user exists on the
+// peer is only known when forwarding.
+transaction::DestinationCheck destination_check(const config::Config& cfg,
+                                                const auth::IUserDirectory& directory) {
+  return [&cfg, &directory](std::string_view user, std::string_view server) -> Result<void> {
     if (server.empty() || server == cfg.instance_name()) {
-      if (cfg.find_user(user) == nullptr) {
-        return std::unexpected(Error::make(ErrCode::unknown_destination,
-                                           std::format("no user '{}' on this server", user)));
+      CFD_TRY(is_user, directory.has_user(user));
+      if (is_user) {
+        return {};
+      }
+      CFD_TRY(is_group, directory.has_group(user));
+      if (!is_group) {
+        return std::unexpected(
+            Error::make(ErrCode::unknown_destination,
+                        std::format("no user or group '{}' on this server", user)));
       }
       return {};
     }
@@ -106,6 +119,10 @@ Result<void> serve(const config::Config& cfg, const common::IClock& clock, loggi
                    logging::BusinessLog& blog) {
   CFD_TRY(store, storage::FileStore::open(cfg.storage().root));
 
+  // Local users or LDAP, per auth.provider. Owned here: the service and the
+  // authenticator only hold references.
+  CFD_TRY(directory, auth::make_directory(cfg, &tlog));
+
   transaction::TransactionRepository repo(store);
   CFD_TRYV(repo.load());
 
@@ -114,7 +131,10 @@ Result<void> serve(const config::Config& cfg, const common::IClock& clock, loggi
       transaction::ServiceOptions{
           .local_server = cfg.instance_name(),
           .default_retention_days = static_cast<int>(cfg.retention().default_days),
-          .check_destination = destination_check(cfg),
+          .check_destination = destination_check(cfg, *directory),
+          .is_recipient = [&dir = *directory](std::string_view user, std::string_view target) {
+            return dir.is_member(user, target);
+          },
           .on_committed = {},  // ForwardQueue::enqueue once forwarder exists
       });
 
@@ -122,7 +142,7 @@ Result<void> serve(const config::Config& cfg, const common::IClock& clock, loggi
   api::Router router;
   CFD_TRYV(handlers.register_routes(router));
 
-  CFD_TRY(users_and_peers, auth::Authenticator::create(cfg));
+  CFD_TRY(users_and_peers, auth::Authenticator::create(cfg, *directory));
   const HeaderAuthenticator authenticator(users_and_peers);
 
   CFD_TRY(options, api::ServerOptions::from_config(cfg));
@@ -153,10 +173,16 @@ Result<void> serve(const config::Config& cfg, const common::IClock& clock, loggi
 
 int main(int argc, char** argv) {
   const std::span args(argv, static_cast<std::size_t>(argc));
-  if (args.size() != 2 || std::string_view(args[1]) == "-h"
-      || std::string_view(args[1]) == "--help") {
-    usage(args[0]);
+  if (args.size() != 2) {
+    usage(std::cerr, args[0]);
     return 2;
+  }
+  if (const std::string_view arg = args[1]; arg == "-h" || arg == "--help") {
+    usage(std::cout, args[0]);
+    return 0;
+  } else if (arg == "-v" || arg == "--version") {
+    std::cout << "confide-server " << version::kProjectVersionString << '\n';
+    return 0;
   }
 
   auto cfg = config::ConfigLoader::from_file(args[1]);
@@ -181,6 +207,9 @@ int main(int argc, char** argv) {
   logging::BusinessLog blog(
       std::make_unique<logging::FileSink>(log_cfg.dir / "business.log", log_cfg.rotate_bytes),
       clock);
+
+  tlog.info(kTag, "confide-server {} starting, config {}", version::kProjectVersionString,
+            args[1]);
 
   for (const auto& w : cfg->warnings()) {
     tlog.warn(kTag, "config: {}", w);

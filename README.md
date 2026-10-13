@@ -18,9 +18,10 @@ See [Requirements.md](Requirements.md) and [Architecture.md](Architecture.md) fo
 |-----------|--------------|
 | create / upload / delete / commit / list / download over REST | forwarding to a peer server (transactions to `user@otherServer` stay `committed`) |
 | TLS on/off | retention sweep (expired transactions are not deleted yet) |
-| Basic auth, access rules, path checks | `ftc` command-line client (use `curl`) |
-| business and technical logs, log rotation | Bearer tokens for users (`auth.token_ttl_s` is read but unused) |
+| Basic auth, access rules, path checks | Bearer tokens for users (`auth.token_ttl_s` is read but unused) |
+| business and technical logs, log rotation | |
 | `/internal/...` peer endpoints (receiving side) | |
+| `ftc` client: `send`, `inbox`, `outbox`, `show`, `files`, `get` | |
 
 ## 1. Build
 
@@ -30,7 +31,7 @@ See [Requirements.md](Requirements.md) and [Architecture.md](Architecture.md) fo
 - g++ 15 (C++23)
 - CMake 3.21+ and Ninja
 - [vcpkg](https://github.com/microsoft/vcpkg) with `VCPKG_ROOT` set. It installs `toml11` and `gtest` from [vcpkg.json](vcpkg.json).
-- Boost 1.83+ (`json` component, plus header-only Asio/Beast) and OpenSSL, from the system
+- Boost 1.83+ (`json` and `program_options` components, plus header-only Asio/Beast) and OpenSSL, from the system
 
 On Ubuntu:
 
@@ -55,10 +56,16 @@ Both presets use the same directory `build/`. Binaries go to `build/bin/`:
 |--------|------------|
 | `confide-server` | the server |
 | `confide-passwd` | prints a password hash for the config |
+| `ftc` | command-line client (`ftc --help`) |
 | `*_tests` | unit tests (one per module) |
 | `example-*` | small examples, not needed to run the server |
 
 To build without tests, add `-DWITH_GOOGLE_TEST=OFF` to the configure command.
+
+LDAP login (`auth.provider = "ldap"`, see [server.example.toml](config/server.example.toml)) is
+optional: add `-DWITH_LDAP=ON` and install OpenLDAP (`sudo apt install libldap-dev`). A test
+directory runs with `docker compose -f docker/docker-compose.yml up -d`; its tests run with
+`CONFIDE_LDAP_TEST_URI=ldap://localhost:1389 ctest --test-dir build -R Ldap`.
 
 Optional: `cmake --install build` copies `confide-server` and `confide-passwd` to
 `install/bin/`, and `cd build && cpack` makes a `.deb` package.
@@ -81,6 +88,55 @@ read -rs PW && printf '%s\n' "$PW" | build/bin/confide-passwd
 
 `--iterations N` changes the PBKDF2 cost (lower values are only for local tests).
 
+### Users file
+
+Users are kept in a separate file, like `/etc/passwd`: one `name:password_hash` per line.
+The config points to it with `auth.users_file`. Blank lines and lines starting with `#` are
+ignored. A bad line stops the server from starting, with the file and line number in the
+message. Start from [config/users.example](config/users.example).
+
+```
+# name:password_hash
+alice:pbkdf2-sha256$600000$...$...
+bob:pbkdf2-sha256$600000$...$...
+```
+
+`confide-passwd --user NAME` prints the whole line, so you can append it directly:
+
+```bash
+read -rs PW && printf '%s\n' "$PW" | build/bin/confide-passwd --user alice >> users
+chmod 600 users
+```
+
+The server warns in the technical log if other users can read the file. Users can also be
+put in the main config as `[[user]]` blocks; both sources are merged, and the same name in
+both is an error. The file is read once at startup: restart the server after a change.
+
+### Groups file
+
+Groups are optional and kept in a file like `/etc/group`, without the password and GID
+fields: one `name:member,member,...` per line. The config points to it with
+`auth.groups_file`. Blank lines and `#` comments are ignored, spaces around members are
+allowed, and a group may have no members. Start from
+[config/groups.example](config/groups.example).
+
+```
+# name:member,member,...
+devs:alice,bob
+ops:carol
+```
+
+A group is a receiver like a user: `ftc send --to devs` or, from another server,
+`--to devs@siteA`. It is still one transaction with one copy of the files. Every member
+sees it in their inbox once it is committed and can download it, and only the sender can
+change it. Membership is checked on each request, so a new member also sees older group
+transactions and a removed member loses access.
+
+Users and groups share one namespace: a group with a user's name is an error, and so is a
+member that is not a configured user. Groups can also be put in the main config as
+`[[group]]` blocks (`name`, `members = ["alice", "bob"]`). The file is read once at
+startup: restart the server after a change.
+
 ### Settings
 
 Only `instance_name`, `[storage].root` and, with TLS on, `tls.cert` / `tls.key` are required.
@@ -97,7 +153,10 @@ Everything else has a default. Unknown keys give a warning in the technical log.
 | `tls.enabled` | `true` | HTTPS on/off. `false` sends passwords and files in clear text: local testing only |
 | `tls.cert`, `tls.key` | — | PEM certificate and key, required when TLS is on |
 | `tls.ca` | system CAs | CA bundle to verify peer servers |
-| `[[user]]` `name`, `password_hash` | — | one block per local user |
+| `auth.users_file` | — | file with one `name:password_hash` per line (see [Users file](#users-file)) |
+| `[[user]]` `name`, `password_hash` | — | one block per local user, in addition to `users_file` |
+| `auth.groups_file` | — | file with one `name:member,member,...` per line (see [Groups file](#groups-file)) |
+| `[[group]]` `name`, `members` | — | one block per group, in addition to `groups_file` |
 | `log.level` | `info` | `trace`, `debug`, `info`, `warn`, `error` |
 | `log.dir` | `<storage.root>/logs` | folder for `technical.log` and `business.log` |
 | `log.rotate_bytes` | `67108864` | rotate a log at this size, `0` = never |
@@ -125,14 +184,12 @@ port = 8080
 [tls]
 enabled = false
 
-[[user]]
-name = "alice"
-password_hash = "<output of confide-passwd>"
-
-[[user]]
-name = "bob"
-password_hash = "<output of confide-passwd>"
+[auth]
+users_file = "users"
 ```
+
+and next to it a `users` file with lines from `confide-passwd --user alice` and
+`confide-passwd --user bob`.
 
 ### TLS
 
@@ -220,6 +277,44 @@ curl -u bob:bob-pw -o a.txt $U/transactions/$ID/files/report/a.txt
 ```
 
 Use `--data-binary` (not `-d`) for uploads, so curl does not change the file.
+
+### Same flow with ftc
+
+`ftc send` does steps 1–3 in one command: it creates the transaction, uploads every file
+with its SHA-256 and commits. `ftc get` downloads all files of a transaction and checks
+each SHA-256 before it keeps the file.
+
+The server comes from `-s` / `FTC_SERVER`, the user from `-u` / `FTC_USER`. The password
+is read from `FTC_PASSWORD`, or asked for on the terminal.
+
+```bash
+export FTC_SERVER=http://127.0.0.1:8080
+
+# 1-3. alice sends the folder report/ (holds a.txt) to bob; a folder keeps its
+#      name, so the file arrives as report/a.txt
+build/bin/ftc -u alice send --to bob report/
+# password for alice:
+# created b3c18f72-... for bob
+#   report/a.txt
+# committed b3c18f72-... (1 files)
+ID=b3c18f72-...
+
+# 4. bob lists incoming transactions and their files
+build/bin/ftc -u bob inbox
+build/bin/ftc -u bob show $ID
+build/bin/ftc -u bob files $ID
+
+# 5. bob downloads into ./downloads (creates ./downloads/report/a.txt)
+build/bin/ftc -u bob get $ID downloads
+```
+
+Notes:
+
+- `--to bob@siteB` sends to a user on another server, `--retention DAYS` sets `retention_days`.
+- `ftc outbox` lists the transactions you sent.
+- `get` does not overwrite existing files unless you add `--force`.
+- If an upload fails, `send` prints the id of the transaction it left `open`.
+- With TLS, use an `https://` URL and `--ca-file cert.pem` (or `FTC_CA_FILE`) for a self-signed certificate.
 
 ## 5. Check
 

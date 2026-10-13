@@ -13,6 +13,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <unordered_set>
 #include <vector>
 
 namespace confide::config::detail {
@@ -37,6 +38,23 @@ private:
   Result<void> parse_rest(RestCfg& out);
   Result<void> parse_tls(TlsCfg& out);
   Result<void> parse_auth(AuthCfg& out);
+  Result<void> parse_ldap(const toml::value* auth, LdapCfg& out);
+  // Reads a one-secret file (e.g. a bind password) into `out`.
+  Result<void> read_secret(const std::filesystem::path& path, std::string_view key,
+                           std::string& out);
+  // Reads `name:password_hash` lines from `path` into `out.users`.
+  Result<void> parse_users_file(const std::filesystem::path& path,
+                                std::unordered_set<std::string>& seen, AuthCfg& out);
+  // `[[user]]` blocks into `out.users`.
+  Result<void> parse_inline_users(std::unordered_set<std::string>& seen, AuthCfg& out);
+  // Reads `name:member,...` lines from `path` into `out.groups`. `users` are
+  // the user names already loaded.
+  Result<void> parse_groups_file(const std::filesystem::path& path,
+                                 const std::unordered_set<std::string>& users,
+                                 std::unordered_set<std::string>& seen, AuthCfg& out);
+  // `[[group]]` blocks into `out.groups`.
+  Result<void> parse_inline_groups(const std::unordered_set<std::string>& users,
+                                   std::unordered_set<std::string>& seen, AuthCfg& out);
   Result<void> parse_log(LogCfg& out, const StorageCfg& storage);
   Result<void> parse_retention(RetentionCfg& out);
   Result<void> parse_peers(std::vector<PeerCfg>& out, const std::string& instance_name);

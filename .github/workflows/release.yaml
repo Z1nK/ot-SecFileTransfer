@@ -1,9 +1,10 @@
 name: 'C++ CI SecFileTransfer'
 
+# Release on version tags: `git tag v1.2.3 && git push origin v1.2.3`.
 on:
   push:
-    branches:
-      - main
+    tags:
+      - 'v*'
 
 env:
   CONFIGURE_PRESET: x64-release-linux
@@ -20,11 +21,20 @@ jobs:
         with:
           submodules: true
 
+      - name: Version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::tag '$GITHUB_REF_NAME' is not vX.Y.Z"
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y g++-14 ninja-build pkg-config \
-            libboost-json-dev libssl-dev
+            libboost-json-dev libboost-program-options-dev libssl-dev libldap-dev
 
       - name: Setup vcpkg
         run: |
@@ -45,13 +55,17 @@ jobs:
           cmake --preset ${{ env.CONFIGURE_PRESET }} \
             -DCMAKE_CXX_COMPILER=g++-14 \
             -DCMAKE_C_COMPILER=gcc-14 \
-            -DPATCH_VERSION=${{ github.run_number }}
+            -DAPP_VERSION=${{ env.VERSION }}
 
       - name: Build
         run: cmake --build --preset ${{ env.CONFIGURE_PRESET }}
 
       - name: Run tests
         run: ctest --test-dir ${{ env.BUILD_DIR }} --output-on-failure
+
+      - name: Check reported version
+        run: |
+          ./${{ env.BUILD_DIR }}/bin/confide-server --version | grep -Fx "confide-server ${{ env.VERSION }}"
 
       - name: Create package
         run: cmake --build --preset ${{ env.CONFIGURE_PRESET }} --target package
@@ -60,7 +74,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: deb-package
-          path: ${{ env.BUILD_DIR }}/SecFileTransfer-0.0.${{ github.run_number }}-Linux.deb
+          path: ${{ env.BUILD_DIR }}/SecFileTransfer-${{ env.VERSION }}-Linux.deb
           if-no-files-found: error
           retention-days: 1
 
@@ -80,8 +94,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create ${{ github.run_number }} \
+          gh release create "$GITHUB_REF_NAME" \
             --repo ${{ github.repository }} \
-            --title "Release ${{ github.run_number }}" \
-            --notes "Automated release ${{ github.run_number }}" \
-            ./SecFileTransfer-0.0.${{ github.run_number }}-Linux.deb
+            --title "Release ${GITHUB_REF_NAME#v}" \
+            --generate-notes \
+            ./SecFileTransfer-*-Linux.deb

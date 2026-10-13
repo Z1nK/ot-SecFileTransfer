@@ -18,15 +18,37 @@ key = "/etc/confide/key.pem"
 # ca = "/etc/confide/ca.pem"     # verifies peers; default = system CAs
 
 [auth]
+provider = "local"               # "local" (users/groups below) or "ldap" (needs -DWITH_LDAP=ON)
 token_ttl_s = 3600
+users_file = "users"             # `name:password_hash` per line, see users.example; chmod 600
+groups_file = "groups"           # optional, `name:member,member` per line, see groups.example
 
-[[user]]
-name = "alice"
-password_hash = "<hash>"         # from `confide-passwd`; plaintext `password` is rejected
+# Users can also be listed here instead of (or as well as) in users_file:
+# [[user]]
+# name = "carol"
+# password_hash = "<hash>"       # from `confide-passwd`; plaintext `password` is rejected
 
-[[user]]
-name = "bob"
-password_hash = "<hash>"
+# Groups too, as well as or instead of groups_file:
+# [[group]]
+# name = "ops"
+# members = ["carol"]
+
+# With provider = "ldap", users and groups come from the directory instead, and
+# the local users/groups settings above are ignored. Values for the test
+# instance in docker/docker-compose.yml:
+# [auth.ldap]
+# preset = "openldap"            # or "active_directory" (sAMAccountName, nested groups)
+# uri = "ldap://localhost:1389"  # ldaps://... or start_tls = true outside of tests
+# start_tls = false
+# tls_verify = true
+# ca_file = ""                   # PEM bundle; empty = system default
+# timeout_s = 5
+# bind_dn = "cn=admin,dc=example,dc=org"   # read-only service account; empty = anonymous
+# bind_password_file = "ldap_bind"         # or bind_password = "..."; chmod 600
+# user_base_dn = "ou=people,dc=example,dc=org"
+# group_base_dn = "ou=groups,dc=example,dc=org"   # empty = no groups
+# user_filter = ""               # empty = preset default, e.g. "(&(objectClass=inetOrgPerson)(uid={username}))"
+# cache_ttl_s = 300              # reuse verified passwords and lookups; 0 = always ask
 
 [log]
 level = "info"                   # trace | debug | info | warn | error

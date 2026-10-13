@@ -47,6 +47,15 @@ void print(const Config& cfg) {
     std::cout << "  - " << u.name << '\n';
   }
 
+  std::cout << "groups (" << cfg.auth().groups.size() << "):\n";
+  for (const auto& g : cfg.auth().groups) {
+    std::cout << "  - " << g.name << ':';
+    for (const auto& m : g.members) {
+      std::cout << ' ' << m;
+    }
+    std::cout << '\n';
+  }
+
   std::cout << "peers (" << cfg.peers().size() << "):\n";
   for (const auto& p : cfg.peers()) {
     std::cout << "  - " << p.name << " -> " << p.host << ':' << p.port << '\n';
@@ -57,7 +66,9 @@ void print(const Config& cfg) {
 void lookup(const Config& cfg, std::string_view user, std::string_view server) {
   std::cout << "lookup " << user << '@' << server << ": ";
   if (server == cfg.instance_name()) {
-    std::cout << (cfg.find_user(user) != nullptr ? "local user" : "destination unknown (user)");
+    std::cout << (cfg.find_user(user) != nullptr    ? "local user"
+                  : cfg.find_group(user) != nullptr ? "local group"
+                                                    : "destination unknown (user)");
   } else if (const auto* peer = cfg.find_peer(server)) {
     std::cout << "forward to " << peer->host << ':' << peer->port;
   } else {
