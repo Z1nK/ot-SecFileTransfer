@@ -5,8 +5,7 @@ which, from process start to a byte landing on disk and the response going
 back. For the target design see [Architecture.md](Architecture.md).
 
 Not implemented yet: the forwarder (`ServiceOptions::on_committed` is empty,
-so committed remote transactions stay `committed`) and the retention job
-(`list_expired()` / `expire()` exist but nothing calls them).
+so committed remote transactions stay `committed`).
 
 ---
 
@@ -118,9 +117,16 @@ main(argc, argv)
     ├── api::HttpServer server(options, router, authenticator, tlog)
     ├── signal_set(SIGINT, SIGTERM).async_wait(-> server.stop())
     ├── server.start()                                    // see §4.1
+    ├── retention::RetentionScheduler retention(service, tlog, sweep_interval_s)
+    ├── retention.start()      // worker thread: run_once() now, then every interval
+    │     run_once(): for id in service.list_expired():   // expires_at <= now, any state
+    │                   service.expire(id)                // -> expired, delete folder,
+    │                                                     //    blog `expired`
+    │                 failures -> tlog.warn, retried next sweep
     ├── no TLS -> tlog.warn("passwords travel unencrypted")
     ├── signal_io.run()        // blocks main thread until a signal
-    └── server.wait()          // joins the server's worker threads
+    ├── server.wait()          // joins the server's worker threads
+    └── retention.stop()       // wakes the worker (condition_variable), joins it
 ```
 
 `destination_check` (FR-13): a local target must be a user **or a group**
@@ -641,7 +647,8 @@ HttpServer::Impl::stop()
 ├── post(acceptor strand): acceptor.close()      -> accept_loop ends
 └── for each tracked connection: post(conn strand): stream.close()
       -> pending reads/writes fail, coroutines finish, Upload destructors delete temp files
-main: signal_io.run() returns -> server.wait() joins all threads -> return 0
+main: signal_io.run() returns -> server.wait() joins all threads
+      -> retention.stop() (lets a running sweep finish) -> return 0
 ```
 
 ---
@@ -657,8 +664,11 @@ main: signal_io.run() returns -> server.wait() joins all threads -> return 0
   `invalid user name or password`.
 - **Business log** (`business.log`, `logging::BusinessLog::record(BizEvent)`):
   one event per business action: `tx_created`, `file_added`, `file_removed`,
-  `committed`, `received`, `downloaded`, plus `forwarded` / `expired` from the
-  not-yet-wired `mark_delivered()` / `expire()`.
+  `committed`, `received`, `downloaded`, `expired` (retention sweep), plus
+  `forwarded` from the not-yet-wired `mark_delivered()`.
+- The retention sweep also writes to the technical log (tag `retention`):
+  start/stop, a summary line when a sweep removed something, and a warning
+  per failed `expire()`.
 
 ---
 

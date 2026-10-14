@@ -3,9 +3,8 @@
 //
 //   confide-server path/to/server.toml
 //
-// Only wiring lives here. forwarder and retention are added once they exist;
-// until then committed remote transactions stay `committed` and nothing
-// expires.
+// Only wiring lives here. forwarder is added once it exists; until then
+// committed remote transactions stay `committed`.
 
 #include <api/auth_handlers.hpp>
 #include <api/authenticator.hpp>
@@ -20,6 +19,7 @@
 #include <logging/business_log.hpp>
 #include <logging/sink.hpp>
 #include <logging/tech_log.hpp>
+#include <retention/scheduler.hpp>
 #include <storage/storage.hpp>
 #include <transaction/repository.hpp>
 #include <transaction/service.hpp>
@@ -28,6 +28,7 @@
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/signal_set.hpp>
 
+#include <chrono>
 #include <csignal>
 #include <filesystem>
 #include <format>
@@ -180,6 +181,13 @@ Result<void> serve(const config::Config& cfg, const common::IClock& clock, loggi
   });
 
   CFD_TRYV(server.start());
+
+  // Sweeps once now (catches what expired while the server was down), then
+  // every sweep_interval_s. Sweeps and requests share the per-transaction
+  // locks in TransactionService, so they can run side by side.
+  retention::RetentionScheduler retention(
+      service, tlog, std::chrono::seconds{cfg.retention().sweep_interval_s});
+  retention.start();
   if (!tls) {
     tlog.warn(kTag, "TLS is off ([tls] enabled = false): passwords travel unencrypted, "
                     "use for local testing only");
@@ -189,6 +197,7 @@ Result<void> serve(const config::Config& cfg, const common::IClock& clock, loggi
 
   signal_io.run();  // returns once the signal handler has run
   server.wait();
+  retention.stop();
   tlog.info(kTag, "stopped");
   return {};
 }

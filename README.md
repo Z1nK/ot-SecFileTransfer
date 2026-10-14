@@ -17,7 +17,8 @@ See [Requirements.md](Requirements.md) and [Architecture.md](Architecture.md) fo
 | Works now | Not done yet |
 |-----------|--------------|
 | create / upload / delete / commit / list / download over REST | forwarding to a peer server (transactions to `user@otherServer` stay `committed`) |
-| TLS on/off | retention sweep (expired transactions are not deleted yet) |
+| TLS on/off | |
+| retention: expired transactions are deleted every `sweep_interval_s` | |
 | Basic auth and user tokens (`ftc login`), login throttling, access rules, path checks | |
 | business and technical logs, log rotation | |
 | `/internal/...` peer endpoints (receiving side) | |
