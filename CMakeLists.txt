@@ -30,7 +30,7 @@ if(WITH_GOOGLE_TEST)
 endif()
 
 # -----------------------------------------------------------------------------
-# Packaging: one .deb per install() COMPONENT
+# Packaging: one .deb/.rpm per install() COMPONENT
 #   server -> confide         (confide-server)
 #   utils  -> confide-utils   (confide-passwd)
 #   client -> confide-client  (ftc)
@@ -59,5 +59,17 @@ set(CPACK_COMPONENT_CLIENT_DESCRIPTION "Confide command line client (ftc)")
 # libraries (needs dpkg-shlibdeps).
 set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+
+# RPM (EL8 CI job runs `cpack -G RPM`): same three components,
+# <name>-<version>-1.el8.<arch>.rpm, Requires: from the linked shared libraries.
+set(CPACK_RPM_COMPONENT_INSTALL ON)
+set(CPACK_RPM_SERVER_PACKAGE_NAME confide)
+set(CPACK_RPM_UTILS_PACKAGE_NAME confide-utils)
+set(CPACK_RPM_CLIENT_PACKAGE_NAME confide-client)
+set(CPACK_RPM_FILE_NAME RPM-DEFAULT)
+set(CPACK_RPM_PACKAGE_RELEASE 1)
+set(CPACK_RPM_PACKAGE_RELEASE_DIST ON)
+set(CPACK_RPM_PACKAGE_LICENSE "Proprietary")
+set(CPACK_RPM_PACKAGE_AUTOREQ ON)
 
 include(CPack)

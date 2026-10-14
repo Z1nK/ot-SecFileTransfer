@@ -12,8 +12,8 @@ env:
   VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.vcpkg-cache
 
 jobs:
-  build:
-    name: Build & Package
+  build-deb:
+    name: Build & Package (.deb)
     runs-on: ubuntu-26.04
     steps:
       - name: Checkout
@@ -73,25 +73,148 @@ jobs:
       - name: Upload .deb artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: deb-packages
+          name: packages-deb
           # confide, confide-utils and confide-client
           path: ${{ env.BUILD_DIR }}/*_${{ env.VERSION }}_*.deb
           if-no-files-found: error
           retention-days: 1
 
+  # RHEL 8 needs its own build: Ubuntu binaries want a newer glibc, OpenSSL 3
+  # and OpenLDAP 2.6. gcc-toolset-14 links the newer libstdc++ parts
+  # statically, Boost comes from vcpkg (EL8 has 1.66), OpenSSL 1.1.1 and
+  # OpenLDAP 2.4 are the system ones.
+  build-rpm-el8:
+    name: Build & Package (.rpm, EL8)
+    runs-on: ubuntu-latest
+    container: almalinux:8
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # git before checkout, otherwise it downloads a tarball without submodules.
+      - name: Install system dependencies
+        run: |
+          dnf -y install dnf-plugins-core
+          dnf config-manager --set-enabled powertools
+          dnf -y install gcc-toolset-14 cmake ninja-build git curl zip unzip tar perl \
+            pkgconf-pkg-config openssl-devel openldap-devel rpm-build
+          echo /opt/rh/gcc-toolset-14/root/usr/bin >> "$GITHUB_PATH"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::tag '$GITHUB_REF_NAME' is not vX.Y.Z"
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      # ${{ github.workspace }} is the host path; inside the container the
+      # workspace is $GITHUB_WORKSPACE.
+      - name: Setup vcpkg
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git "$RUNNER_TEMP/vcpkg"
+          "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+          echo "VCPKG_ROOT=$RUNNER_TEMP/vcpkg" >> "$GITHUB_ENV"
+          echo "VCPKG_DEFAULT_BINARY_CACHE=$GITHUB_WORKSPACE/.vcpkg-cache" >> "$GITHUB_ENV"
+          mkdir -p "$GITHUB_WORKSPACE/.vcpkg-cache"
+
+      - name: Cache vcpkg binaries
+        uses: actions/cache@v4
+        with:
+          path: .vcpkg-cache
+          key: vcpkg-el8-gcc14-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-el8-gcc14-
+
+      - name: Configure
+        run: |
+          g++ --version
+          cmake --preset ${{ env.CONFIGURE_PRESET }} \
+            -DAPP_VERSION=${{ env.VERSION }} \
+            -DVCPKG_MANIFEST_FEATURES=boost
+
+      - name: Build
+        run: cmake --build --preset ${{ env.CONFIGURE_PRESET }}
+
+      - name: Run tests
+        run: ctest --test-dir ${{ env.BUILD_DIR }} --output-on-failure
+
+      - name: Check reported version
+        run: |
+          ./${{ env.BUILD_DIR }}/bin/confide-server --version | grep -Fx "confide-server ${{ env.VERSION }}"
+
+      - name: Create package
+        working-directory: ${{ env.BUILD_DIR }}
+        run: cpack -G RPM
+
+      # Boost must be linked statically; the rest must be EL8 system libraries.
+      - name: Inspect packages
+        working-directory: ${{ env.BUILD_DIR }}
+        run: |
+          for rpm in ./*-${{ env.VERSION }}-*.el8.x86_64.rpm; do
+            echo "== $rpm"
+            rpm -qpi "$rpm"
+            rpm -qpl "$rpm"
+            rpm -qpR "$rpm" | tee requires.txt
+            if grep -q libboost requires.txt; then
+              echo "::error::$rpm depends on a shared Boost library"
+              exit 1
+            fi
+          done
+
+      - name: Upload .rpm artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages-rpm-el8
+          # confide, confide-utils and confide-client
+          path: ${{ env.BUILD_DIR }}/*-${{ env.VERSION }}-*.el8.x86_64.rpm
+          if-no-files-found: error
+          retention-days: 1
+
+  # Install on a clean EL8 (a different rebuild than the build image) to catch
+  # missing runtime dependencies.
+  test-rpm-el8:
+    name: Install test (.rpm, EL8)
+    needs: build-rpm-el8
+    runs-on: ubuntu-latest
+    container: rockylinux:8
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Download .rpm artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: packages-rpm-el8
+
+      - name: Install
+        run: dnf -y install ./*.rpm
+
+      - name: Run binaries
+        run: |
+          confide-server --version
+          ftc --help
+          echo secret | confide-passwd
+
   release:
     name: Release
-    needs: build
+    needs: [build-deb, test-rpm-el8]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Download .deb artifacts
+      - name: Download package artifacts
         uses: actions/download-artifact@v4
         with:
-          name: deb-packages
+          pattern: packages-*
+          merge-multiple: true
 
-      - name: Create GitHub Release and upload asset
+      - name: Create GitHub Release and upload assets
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -99,4 +222,4 @@ jobs:
             --repo ${{ github.repository }} \
             --title "Release ${GITHUB_REF_NAME#v}" \
             --generate-notes \
-            ./*.deb
+            ./*.deb ./*.rpm
