@@ -1,6 +1,7 @@
 #include "http_client.hpp"
 
-#include <auth/base64.hpp>
+#include <common/base64.hpp>
+#include <openssl/crypto.h>
 
 #include <boost/asio/connect.hpp>
 #include <boost/asio/io_context.hpp>
@@ -64,6 +65,8 @@ ErrCode code_for(http::status status) {
     return ErrCode::integrity;
   case http::status::service_unavailable:
     return ErrCode::unavailable;
+  case http::status::too_many_requests:
+    return ErrCode::throttled;
   default:
     return ErrCode::internal;
   }
@@ -165,6 +168,7 @@ Result<ServerUrl> ServerUrl::parse(std::string_view text) {
 struct HttpClient::Impl {
   ServerUrl url;
   std::string authorization;
+  HttpClient::Relogin relogin;
   std::unique_ptr<ssl::context> tls;  // null for http://
   asio::io_context io;
 
@@ -173,7 +177,9 @@ struct HttpClient::Impl {
     http::request<Body> req{method, target, 11};
     req.set(http::field::host, url.host + ":" + url.port);
     req.set(http::field::user_agent, "ftc");
-    req.set(http::field::authorization, authorization);
+    if (!authorization.empty()) {
+      req.set(http::field::authorization, authorization);
+    }
     req.keep_alive(false);
     return req;
   }
@@ -224,15 +230,9 @@ HttpClient::HttpClient(HttpClient&&) noexcept = default;
 HttpClient& HttpClient::operator=(HttpClient&&) noexcept = default;
 HttpClient::~HttpClient() = default;
 
-Result<HttpClient> HttpClient::create(ServerUrl url, const Credentials& creds,
+Result<HttpClient> HttpClient::create(ServerUrl url,
                                       const std::optional<std::filesystem::path>& ca_file) {
   auto impl = std::make_unique<Impl>();
-  const std::string pair = creds.user + ":" + creds.password;
-  impl->authorization = "Basic "
-                        + auth::base64_encode(common::ByteSpan{
-                            reinterpret_cast<const std::byte*>(pair.data()),  // NOLINT
-                            pair.size()});
-
   if (url.tls) {
     impl->tls = std::make_unique<ssl::context>(ssl::context::tls_client);
     impl->tls->set_verify_mode(ssl::verify_peer);
@@ -250,72 +250,141 @@ Result<HttpClient> HttpClient::create(ServerUrl url, const Credentials& creds,
   return HttpClient(std::move(impl));
 }
 
-Result<std::string> HttpClient::call(http::verb method, std::string_view target, std::string json) {
-  return impl_->exchange<std::string>([&](auto& stream) {
-    auto req = impl_->make_request<http::string_body>(method, target);
-    if (!json.empty()) {
-      req.set(http::field::content_type, "application/json");
-      req.body() = std::move(json);
-    }
+void HttpClient::set_token(std::string_view token) {
+  impl_->authorization = "Bearer " + std::string{token};
+}
+
+void HttpClient::on_expired(Relogin relogin) {
+  impl_->relogin = std::move(relogin);
+}
+
+template <class T, class Fn>
+Result<T> HttpClient::with_relogin(Fn&& attempt) {
+  auto res = attempt();
+  if (res || res.error().code != ErrCode::auth || !impl_->relogin) {
+    return res;
+  }
+  CFD_TRY(token, impl_->relogin(*this));
+  set_token(token);
+  return attempt();
+}
+
+Result<Login> HttpClient::login(const Credentials& creds) {
+  std::string pair = creds.user + ":" + creds.password;
+  std::string basic = "Basic "
+                      + common::base64_encode(common::ByteSpan{
+                          reinterpret_cast<const std::byte*>(pair.data()),  // NOLINT
+                          pair.size()});
+  auto reply = impl_->exchange<std::string>([&](auto& stream) {
+    auto req = impl_->make_request<http::empty_body>(http::verb::post, "/auth/token");
+    req.set(http::field::authorization, basic);
     req.prepare_payload();
     return roundtrip(stream, req);
+  });
+  // Best effort: copies inside Beast and the caller's string are not ours.
+  OPENSSL_cleanse(pair.data(), pair.size());
+  OPENSSL_cleanse(basic.data(), basic.size());
+  if (!reply) {
+    return std::unexpected(std::move(reply).error());
+  }
+
+  boost::system::error_code ec;
+  const json::value v = json::parse(*reply, ec);
+  const auto* obj = ec ? nullptr : v.if_object();
+  const auto text = [&](std::string_view key) -> std::string {
+    const auto* f = obj == nullptr ? nullptr : obj->if_contains(key);
+    return f != nullptr && f->is_string() ? std::string{f->get_string()} : std::string{};
+  };
+  Login out{.token = text("token"), .user = text("user"), .expires_at = text("expires_at")};
+  if (out.token.empty()) {
+    return fail(ErrCode::internal, "server sent no token");
+  }
+  set_token(out.token);
+  return out;
+}
+
+Result<void> HttpClient::logout() {
+  return impl_
+      ->exchange<std::string>([&](auto& stream) {
+        auto req = impl_->make_request<http::empty_body>(http::verb::delete_, "/auth/token");
+        req.prepare_payload();
+        return roundtrip(stream, req);
+      })
+      .transform([](const std::string&) {});
+}
+
+Result<std::string> HttpClient::call(http::verb method, std::string_view target, std::string json) {
+  return with_relogin<std::string>([&] {
+    return impl_->exchange<std::string>([&](auto& stream) {
+      auto req = impl_->make_request<http::string_body>(method, target);
+      if (!json.empty()) {
+        req.set(http::field::content_type, "application/json");
+        req.body() = json;  // a copy: a retry sends it again
+      }
+      req.prepare_payload();
+      return roundtrip(stream, req);
+    });
   });
 }
 
 Result<std::string> HttpClient::upload(std::string_view target, const std::filesystem::path& file,
                                        const common::Sha256Digest& sha256) {
-  return impl_->exchange<std::string>([&](auto& stream) -> Result<std::string> {
-    auto req = impl_->make_request<http::file_body>(http::verb::put, target);
-    req.set(http::field::content_type, "application/octet-stream");
-    req.set(kChecksumHeader, sha256.to_hex());
-    beast::error_code ec;
-    req.body().open(file.c_str(), beast::file_mode::scan, ec);
-    if (ec) {
-      return fail(ErrCode::io, std::format("{}: {}", file.string(), ec.message()));
-    }
-    req.prepare_payload();
-    return roundtrip(stream, req);
+  return with_relogin<std::string>([&] {
+    return impl_->exchange<std::string>([&](auto& stream) -> Result<std::string> {
+      auto req = impl_->make_request<http::file_body>(http::verb::put, target);
+      req.set(http::field::content_type, "application/octet-stream");
+      req.set(kChecksumHeader, sha256.to_hex());
+      beast::error_code ec;
+      req.body().open(file.c_str(), beast::file_mode::scan, ec);
+      if (ec) {
+        return fail(ErrCode::io, std::format("{}: {}", file.string(), ec.message()));
+      }
+      req.prepare_payload();
+      return roundtrip(stream, req);
+    });
   });
 }
 
 Result<void> HttpClient::download(std::string_view target, const std::filesystem::path& out) {
-  return impl_->exchange<void>([&](auto& stream) -> Result<void> {
-    auto req = impl_->make_request<http::empty_body>(http::verb::get, target);
-    beast::error_code ec;
-    http::write(stream, req, ec);
-    if (ec) {
-      return net_error("send", ec);
-    }
-
-    // Header first: only a 200 body goes to the file.
-    beast::flat_buffer buf;
-    http::response_parser<http::empty_body> head;
-    http::read_header(stream, buf, head, ec);
-    if (ec) {
-      return net_error("receive", ec);
-    }
-    if (head.get().result() != http::status::ok) {
-      http::response_parser<http::string_body> parser{std::move(head)};
-      auto reply = finish_reply(stream, buf, parser);
-      if (!reply) {
-        return std::unexpected(std::move(reply).error());
+  return with_relogin<void>([&] {
+    return impl_->exchange<void>([&](auto& stream) -> Result<void> {
+      auto req = impl_->make_request<http::empty_body>(http::verb::get, target);
+      beast::error_code ec;
+      http::write(stream, req, ec);
+      if (ec) {
+        return net_error("send", ec);
       }
-      return fail(ErrCode::internal,
-                  std::format("unexpected HTTP {}", static_cast<unsigned>(parser.get().result())));
-    }
 
-    http::response_parser<http::file_body> parser{std::move(head)};
-    parser.body_limit(boost::none);
-    parser.get().body().open(out.c_str(), beast::file_mode::write, ec);
-    if (ec) {
-      return fail(ErrCode::io, std::format("{}: {}", out.string(), ec.message()));
-    }
-    http::read(stream, buf, parser, ec);
-    parser.get().body().close();
-    if (ec) {
-      return net_error("receive", ec);
-    }
-    return {};
+      // Header first: only a 200 body goes to the file.
+      beast::flat_buffer buf;
+      http::response_parser<http::empty_body> head;
+      http::read_header(stream, buf, head, ec);
+      if (ec) {
+        return net_error("receive", ec);
+      }
+      if (head.get().result() != http::status::ok) {
+        http::response_parser<http::string_body> parser{std::move(head)};
+        auto reply = finish_reply(stream, buf, parser);
+        if (!reply) {
+          return std::unexpected(std::move(reply).error());
+        }
+        return fail(ErrCode::internal, std::format("unexpected HTTP {}",
+                                                   static_cast<unsigned>(parser.get().result())));
+      }
+
+      http::response_parser<http::file_body> parser{std::move(head)};
+      parser.body_limit(boost::none);
+      parser.get().body().open(out.c_str(), beast::file_mode::write, ec);
+      if (ec) {
+        return fail(ErrCode::io, std::format("{}: {}", out.string(), ec.message()));
+      }
+      http::read(stream, buf, parser, ec);
+      parser.get().body().close();
+      if (ec) {
+        return net_error("receive", ec);
+      }
+      return {};
+    });
   });
 }
 

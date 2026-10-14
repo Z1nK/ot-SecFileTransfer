@@ -16,14 +16,8 @@ enabled = false                  # local testing only
 
 [auth]
 token_ttl_s = 3600
-
-[[user]]
-name = "alice"
-password_hash = "test-hash-alice"
-
-[[user]]
-name = "bob"
-password_hash = "test-hash-bob"
+users_file = "users"             # name:password_hash per line
+groups_file = "groups"           # name:member,member per line
 
 [log]
 level = "debug"

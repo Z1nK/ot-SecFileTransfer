@@ -17,11 +17,12 @@ See [Requirements.md](Requirements.md) and [Architecture.md](Architecture.md) fo
 | Works now | Not done yet |
 |-----------|--------------|
 | create / upload / delete / commit / list / download over REST | forwarding to a peer server (transactions to `user@otherServer` stay `committed`) |
-| TLS on/off | retention sweep (expired transactions are not deleted yet) |
-| Basic auth, access rules, path checks | Bearer tokens for users (`auth.token_ttl_s` is read but unused) |
+| TLS on/off | |
+| retention: expired transactions are deleted every `sweep_interval_s` | |
+| Basic auth and user tokens (`ftc login`), login throttling, access rules, path checks | |
 | business and technical logs, log rotation | |
 | `/internal/...` peer endpoints (receiving side) | |
-| `ftc` client: `send`, `inbox`, `outbox`, `show`, `files`, `get` | |
+| `ftc` client: `login`, `logout`, `send`, `inbox`, `outbox`, `show`, `files`, `get` | |
 
 ## 1. Build
 
@@ -223,11 +224,14 @@ again after a restart.
 
 ## 4. Use the API
 
-All user requests use HTTP Basic auth (`curl -u user:password`). Errors come back as
+User requests carry either HTTP Basic auth (`curl -u user:password`) or a user token
+(`Authorization: Bearer ftu_...`) from `POST /auth/token`. Errors come back as
 `{"error": "<code>", "detail": "..."}`.
 
 | Method | Path | Purpose |
 |--------|------|---------|
+| `POST` | `/auth/token` | log in: Basic auth only (a token can't get a new token); answers `{"token": "ftu_...", "user": "alice", "expires_at": "..."}` |
+| `DELETE` | `/auth/token` | log out: the Bearer token of the request stops working |
 | `POST` | `/transactions` | create; body `{"target_user": "bob", "target_server": "", "retention_days": 30}` (only `target_user` is required) |
 | `GET` | `/transactions?box=in\|out` | my incoming (default) or outgoing transactions |
 | `GET` | `/transactions/{id}` | one transaction and its state |
@@ -246,6 +250,14 @@ All user requests use HTTP Basic auth (`curl -u user:password`). Errors come bac
 | 404 | `notfound` | no such transaction or file |
 | 409 | `conflict` | change to a committed transaction |
 | 422 | `integrity` / `unknown_destination` | checksum mismatch / unknown target user or server |
+| 429 | `throttled` | too many wrong passwords for this user or from this address; wait and retry |
+
+Tokens live `auth.token_ttl_s` (default 3600) from login and are dropped after
+`auth.token_idle_s` (default 900) without use. They are kept in memory only, so a server
+restart logs everybody out. After 5 wrong passwords for one user from one address (20
+from one address, 50 for one user), the server stops checking passwords for that key
+for 30 s, doubling up to 15 min; with LDAP this keeps the server from being used to run
+accounts into the directory's own lockout.
 
 ### Full flow with curl
 
@@ -284,28 +296,43 @@ Use `--data-binary` (not `-d`) for uploads, so curl does not change the file.
 with its SHA-256 and commits. `ftc get` downloads all files of a transaction and checks
 each SHA-256 before it keeps the file.
 
-The server comes from `-s` / `FTC_SERVER`, the user from `-u` / `FTC_USER`. The password
-is read from `FTC_PASSWORD`, or asked for on the terminal.
+The server comes from `-s` / `FTC_SERVER`, the user from `-u` / `FTC_USER`. The first
+command (or `ftc login`) asks for the password on the terminal without echo, trades it
+for a token and saves the token in
+`$XDG_STATE_HOME/ftc/tokens/<user>@<host>_<port>` (default `~/.local/state/...`, folder
+0700, file 0600; ftc refuses a token file that other users can read). Later commands send
+only the token. When it expires, ftc asks for the password again; in a script (stdin not a
+terminal) it fails and tells you to run `ftc login`. `ftc logout` ends the session on the
+server and deletes the file. `FTC_PASSWORD` still works instead of typing (development
+only: other processes of the same user can read the environment).
+
+ftc refuses a plain `http://` server, since the password and token would travel
+unencrypted. For local testing against a server with `[tls] enabled = false`, add
+`--allow-http`, as below.
 
 ```bash
 export FTC_SERVER=http://127.0.0.1:8080
 
+# 0. log in once; the token is used by the next commands
+build/bin/ftc --allow-http -u alice login
+# password for alice:
+# logged in as alice until 2026-10-13T21:00:00Z
+
 # 1-3. alice sends the folder report/ (holds a.txt) to bob; a folder keeps its
 #      name, so the file arrives as report/a.txt
-build/bin/ftc -u alice send --to bob report/
-# password for alice:
+build/bin/ftc --allow-http -u alice send --to bob report/
 # created b3c18f72-... for bob
 #   report/a.txt
 # committed b3c18f72-... (1 files)
 ID=b3c18f72-...
 
-# 4. bob lists incoming transactions and their files
-build/bin/ftc -u bob inbox
-build/bin/ftc -u bob show $ID
-build/bin/ftc -u bob files $ID
+# 4. bob lists incoming transactions and their files (asks bob's password once)
+build/bin/ftc --allow-http -u bob inbox
+build/bin/ftc --allow-http -u bob show $ID
+build/bin/ftc --allow-http -u bob files $ID
 
 # 5. bob downloads into ./downloads (creates ./downloads/report/a.txt)
-build/bin/ftc -u bob get $ID downloads
+build/bin/ftc --allow-http -u bob get $ID downloads
 ```
 
 Notes:

@@ -1,6 +1,7 @@
 set(LOCAL_LIB_NAME common)
 
 add_library(${LOCAL_LIB_NAME} STATIC
+  base64.cpp
   id.cpp
   path_sanitizer.cpp
   sha256.cpp

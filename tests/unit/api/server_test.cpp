@@ -1,28 +1,33 @@
+#include <api/auth_handlers.hpp>
 #include <api/server.hpp>
+#include <gtest/gtest.h>
 
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
-#include <gtest/gtest.h>
 
+#include <chrono>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 using confide::api::Access;
+using confide::api::AuthHandlers;
 using confide::api::HttpServer;
 using confide::api::IAuthenticator;
+using confide::api::IssuedToken;
 using confide::api::RequestContext;
 using confide::api::RequestHeader;
 using confide::api::Response;
 using confide::api::Route;
 using confide::api::Router;
 using confide::api::ServerOptions;
-using confide::common::Error;
 using confide::common::ErrCode;
+using confide::common::Error;
 using confide::common::RelativePath;
 using confide::common::Result;
 using confide::common::Sha256;
@@ -46,9 +51,23 @@ public:
 // "Bearer user-token" -> alice, "Bearer peer-token" -> peer siteB.
 class FakeAuth final : public IAuthenticator {
 public:
-  Result<Caller> authenticate_user(const RequestHeader& req) const override {
+  Result<Caller> authenticate_user(const RequestHeader& req,
+                                   std::string_view source) const override {
+    remember(source);
     if (req[http::field::authorization] == "Bearer user-token") {
       return Caller{.name = "alice"};
+    }
+    return std::unexpected(Error::make(ErrCode::auth, "bad credentials"));
+  }
+
+  Result<Caller> authenticate_password(const RequestHeader& req,
+                                       std::string_view source) const override {
+    remember(source);
+    if (req[http::field::authorization] == "Basic good") {
+      return Caller{.name = "alice"};
+    }
+    if (req[http::field::authorization] == "Basic slow") {
+      return std::unexpected(Error::make(ErrCode::throttled, "retry in 30 s"));
     }
     return std::unexpected(Error::make(ErrCode::auth, "bad credentials"));
   }
@@ -59,6 +78,35 @@ public:
     }
     return std::unexpected(Error::make(ErrCode::auth, "bad peer token"));
   }
+
+  Result<IssuedToken> issue_token(std::string_view user) const override {
+    return IssuedToken{.token = "ftu_for_" + std::string{user},
+                       .expires_at = std::chrono::sys_days{std::chrono::year{2026} / 9 / 24}};
+  }
+
+  void revoke_token(const RequestHeader& req) const override {
+    const std::scoped_lock lock(mutex_);
+    revoked_ = std::string{req[http::field::authorization]};
+  }
+
+  std::string last_source() const {
+    const std::scoped_lock lock(mutex_);
+    return source_;
+  }
+  std::string revoked() const {
+    const std::scoped_lock lock(mutex_);
+    return revoked_;
+  }
+
+private:
+  void remember(std::string_view source) const {
+    const std::scoped_lock lock(mutex_);
+    source_ = source;
+  }
+
+  mutable std::mutex mutex_;
+  mutable std::string source_;
+  mutable std::string revoked_;
 };
 
 std::string text(std::span<const std::byte> bytes) {
@@ -124,6 +172,10 @@ protected:
     ASSERT_TRUE(up.write(payload_));
     ASSERT_TRUE(up.commit());
 
+    tlog_ = std::make_unique<confide::logging::TechLog>(std::make_unique<NullSink>());
+    auth_handlers_ = std::make_unique<AuthHandlers>(auth_, *tlog_);
+    ASSERT_TRUE(auth_handlers_->register_routes(router_));
+
     add(http::verb::get, "/echo/{name}", Access::user, echo);
     add(http::verb::post, "/peer/{name}", Access::peer, echo);
     add(http::verb::put, "/count", Access::user, count);
@@ -140,7 +192,6 @@ protected:
     add(http::verb::get, "/silent", Access::user,
         [](RequestContext&) -> asio::awaitable<void> { co_return; });
 
-    tlog_ = std::make_unique<confide::logging::TechLog>(std::make_unique<NullSink>());
     server_ = std::make_unique<HttpServer>(
         ServerOptions{.bind = "127.0.0.1", .port = 0, .threads = 2, .max_upload_bytes = 8 << 20},
         router_, auth_, *tlog_);
@@ -150,6 +201,7 @@ protected:
 
   void TearDown() override {
     server_.reset();
+    auth_handlers_.reset();
     tlog_.reset();
     store_.reset();
     std::error_code ec;
@@ -202,6 +254,7 @@ protected:
   Router router_;
   FakeAuth auth_;
   std::unique_ptr<confide::logging::TechLog> tlog_;
+  std::unique_ptr<AuthHandlers> auth_handlers_;
   std::unique_ptr<HttpServer> server_;
 
   asio::io_context ioc_;
@@ -239,6 +292,32 @@ TEST_F(ServerTest, PeerRouteNeedsPeerToken) {
   auto res = call(http::verb::post, "/peer/x", {}, "Bearer peer-token");
   EXPECT_EQ(res.result(), http::status::ok);
   EXPECT_EQ(res.body(), "name=x;caller=siteB;peer=1;box=-");
+}
+
+TEST_F(ServerTest, LoginNeedsThePassword) {
+  // A token can't buy a new token.
+  auto res = call(http::verb::post, "/auth/token");
+  EXPECT_EQ(res.result(), http::status::unauthorized);
+  EXPECT_EQ(res[http::field::www_authenticate], R"(Basic realm="confide")");
+
+  res = call(http::verb::post, "/auth/token", {}, "Basic good");
+  EXPECT_EQ(res.result(), http::status::ok);
+  EXPECT_EQ(res.body(),
+            R"({"token":"ftu_for_alice","user":"alice","expires_at":"2026-09-24T00:00:00Z"})");
+  EXPECT_EQ(res[http::field::cache_control], "no-store");
+  EXPECT_EQ(auth_.last_source(), "127.0.0.1");
+}
+
+TEST_F(ServerTest, ThrottledLoginIs429) {
+  auto res = call(http::verb::post, "/auth/token", {}, "Basic slow");
+  EXPECT_EQ(res.result(), http::status::too_many_requests);
+  EXPECT_NE(res.body().find(R"("error":"throttled")"), std::string::npos);
+}
+
+TEST_F(ServerTest, LogoutRevokesThePresentedToken) {
+  auto res = call(http::verb::delete_, "/auth/token");
+  EXPECT_EQ(res.result(), http::status::no_content);
+  EXPECT_EQ(auth_.revoked(), "Bearer user-token");
 }
 
 TEST_F(ServerTest, StreamsUploadBody) {

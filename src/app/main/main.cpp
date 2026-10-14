@@ -3,10 +3,10 @@
 //
 //   confide-server path/to/server.toml
 //
-// Only wiring lives here. forwarder and retention are added once they exist;
-// until then committed remote transactions stay `committed` and nothing
-// expires.
+// Only wiring lives here. forwarder is added once it exists; until then
+// committed remote transactions stay `committed`.
 
+#include <api/auth_handlers.hpp>
 #include <api/authenticator.hpp>
 #include <api/handlers.hpp>
 #include <api/router.hpp>
@@ -19,6 +19,7 @@
 #include <logging/business_log.hpp>
 #include <logging/sink.hpp>
 #include <logging/tech_log.hpp>
+#include <retention/scheduler.hpp>
 #include <storage/storage.hpp>
 #include <transaction/repository.hpp>
 #include <transaction/service.hpp>
@@ -27,6 +28,7 @@
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/signal_set.hpp>
 
+#include <chrono>
 #include <csignal>
 #include <filesystem>
 #include <format>
@@ -94,14 +96,30 @@ class HeaderAuthenticator final : public api::IAuthenticator {
 public:
   explicit HeaderAuthenticator(const auth::Authenticator& auth) : auth_(auth) {}
 
-  Result<transaction::Caller> authenticate_user(const api::RequestHeader& req) const override {
-    CFD_TRY(name, auth_.authenticate_user(authorization(req)));
+  Result<transaction::Caller> authenticate_user(const api::RequestHeader& req,
+                                                std::string_view source) const override {
+    CFD_TRY(name, auth_.authenticate_user(authorization(req), source));
+    return transaction::Caller{.name = std::move(name), .is_peer = false};
+  }
+
+  Result<transaction::Caller> authenticate_password(const api::RequestHeader& req,
+                                                    std::string_view source) const override {
+    CFD_TRY(name, auth_.authenticate_password(authorization(req), source));
     return transaction::Caller{.name = std::move(name), .is_peer = false};
   }
 
   Result<transaction::Caller> authenticate_peer(const api::RequestHeader& req) const override {
     CFD_TRY(name, auth_.authenticate_peer(authorization(req)));
     return transaction::Caller{.name = std::move(name), .is_peer = true};
+  }
+
+  Result<api::IssuedToken> issue_token(std::string_view user) const override {
+    CFD_TRY(issued, auth_.issue_token(user));
+    return api::IssuedToken{.token = std::move(issued.token), .expires_at = issued.expires_at};
+  }
+
+  void revoke_token(const api::RequestHeader& req) const override {
+    auth_.revoke_token(authorization(req));
   }
 
 private:
@@ -131,6 +149,7 @@ Result<void> serve(const config::Config& cfg, const common::IClock& clock, loggi
       transaction::ServiceOptions{
           .local_server = cfg.instance_name(),
           .default_retention_days = static_cast<int>(cfg.retention().default_days),
+          .max_retention_days = static_cast<int>(cfg.retention().max_days),
           .check_destination = destination_check(cfg, *directory),
           .is_recipient = [&dir = *directory](std::string_view user, std::string_view target) {
             return dir.is_member(user, target);
@@ -142,8 +161,10 @@ Result<void> serve(const config::Config& cfg, const common::IClock& clock, loggi
   api::Router router;
   CFD_TRYV(handlers.register_routes(router));
 
-  CFD_TRY(users_and_peers, auth::Authenticator::create(cfg, *directory));
+  CFD_TRY(users_and_peers, auth::Authenticator::create(cfg, *directory, clock));
   const HeaderAuthenticator authenticator(users_and_peers);
+  api::AuthHandlers auth_handlers(authenticator, tlog);
+  CFD_TRYV(auth_handlers.register_routes(router));
 
   CFD_TRY(options, api::ServerOptions::from_config(cfg));
   const bool tls = options.tls != nullptr;
@@ -160,11 +181,23 @@ Result<void> serve(const config::Config& cfg, const common::IClock& clock, loggi
   });
 
   CFD_TRYV(server.start());
+
+  // Sweeps once now (catches what expired while the server was down), then
+  // every sweep_interval_s. Sweeps and requests share the per-transaction
+  // locks in TransactionService, so they can run side by side.
+  retention::RetentionScheduler retention(
+      service, tlog, std::chrono::seconds{cfg.retention().sweep_interval_s});
+  retention.start();
+  if (!tls) {
+    tlog.warn(kTag, "TLS is off ([tls] enabled = false): passwords travel unencrypted, "
+                    "use for local testing only");
+  }
   tlog.info(kTag, "{} listening on {}:{} ({})", cfg.instance_name(), cfg.rest().bind, server.port(),
             tls ? "https" : "http");
 
   signal_io.run();  // returns once the signal handler has run
   server.wait();
+  retention.stop();
   tlog.info(kTag, "stopped");
   return {};
 }

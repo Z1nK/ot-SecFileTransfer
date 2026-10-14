@@ -5,6 +5,7 @@
 #include <boost/beast/http/verb.hpp>
 
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -30,17 +31,42 @@ struct Credentials {
   std::string password;
 };
 
-// Blocking HTTP/1.1 client for the REST API (Architecture §8), with HTTP
-// Basic auth. One connection per call, so there is no connection state to
-// keep in sync with the server.
+// Answer to POST /auth/token.
+struct Login {
+  std::string token;
+  std::string user;        // as the server spells it
+  std::string expires_at;  // ISO 8601, UTC
+};
+
+// Blocking HTTP/1.1 client for the REST API (Architecture §8). Requests
+// carry a user token ("Bearer"), got once from login() with the password.
+// One connection per call, so there is no connection state to keep in sync
+// with the server.
 //
 // Errors: a network or TLS failure is `unavailable`; an error response gives
 // the ErrCode named in its {"error","detail"} body.
 class HttpClient {
 public:
+  // Called when the server rejects the token (`auth`): returns a new token,
+  // usually from login(), or an error that ends the request.
+  using Relogin = std::function<Result<std::string>(HttpClient&)>;
+
   // `ca_file`: PEM bundle to verify an https server; system CAs if unset.
-  static Result<HttpClient> create(ServerUrl url, const Credentials& creds,
+  static Result<HttpClient> create(ServerUrl url,
                                    const std::optional<std::filesystem::path>& ca_file);
+
+  // POST /auth/token with the password (Basic); the only request that sends
+  // it. On success the client uses the new token from then on.
+  Result<Login> login(const Credentials& creds);
+
+  // DELETE /auth/token: the server forgets the current token.
+  Result<void> logout();
+
+  void set_token(std::string_view token);
+
+  // With a Relogin set, a request rejected with `auth` gets one retry with
+  // the token it returns.
+  void on_expired(Relogin relogin);
 
   HttpClient(HttpClient&&) noexcept;
   HttpClient& operator=(HttpClient&&) noexcept;
@@ -62,6 +88,11 @@ public:
 
 private:
   struct Impl;
+
+  // Runs `attempt`, and once more after a relogin if it failed with `auth`.
+  template <class T, class Fn>
+  Result<T> with_relogin(Fn&& attempt);
+
   explicit HttpClient(std::unique_ptr<Impl> impl);
 
   std::unique_ptr<Impl> impl_;

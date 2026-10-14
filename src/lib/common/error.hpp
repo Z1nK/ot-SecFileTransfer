@@ -56,6 +56,10 @@ enum class ErrCode : uint8_t {
   // `ftc` reports the server as down (net).
   unavailable,
 
+  // 429. Too many failed logins for this user or from this address; the
+  // server does not check the password until the backoff is over (auth).
+  throttled,
+
   // 500. Disk read/write, directory create or atomic rename failed
   // (storage, transaction repository, logging file sink).
   io,
@@ -85,6 +89,8 @@ inline std::string_view to_string(ErrCode code) {
     return "unknown_destination";
   case ErrCode::unavailable:
     return "unavailable";
+  case ErrCode::throttled:
+    return "throttled";
   case ErrCode::io:
     return "io";
   case ErrCode::internal:

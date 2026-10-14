@@ -63,6 +63,7 @@ using CommitHook = std::function<void(const Transaction&)>;
 struct ServiceOptions {
   std::string local_server;  // this server's name, from config
   int default_retention_days = 30;
+  int max_retention_days = 365;  // upper limit for CreateRequest::retention_days
   DestinationCheck check_destination;
   MembershipCheck is_recipient;  // may be empty: only exact name matches
   CommitHook on_committed;  // may be empty

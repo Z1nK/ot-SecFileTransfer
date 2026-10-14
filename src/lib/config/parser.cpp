@@ -271,7 +271,8 @@ Result<void> Parser::parse_tls(TlsCfg& out) {
 Result<void> Parser::parse_auth(AuthCfg& out) {
   CFD_TRY(tbl, section(root_, "auth"));
   if (tbl != nullptr) {
-    warn_unknown(*tbl, "auth.", {"provider", "token_ttl_s", "users_file", "groups_file", "ldap"});
+    warn_unknown(*tbl, "auth.",
+                 {"provider", "token_ttl_s", "token_idle_s", "users_file", "groups_file", "ldap"});
     std::string provider;
     CFD_TRYV(get(*tbl, "provider", "auth", provider));
     if (provider == "ldap") {
@@ -280,10 +281,14 @@ Result<void> Parser::parse_auth(AuthCfg& out) {
       return invalid(std::format("auth.provider: '{}' is not one of local, ldap", provider));
     }
     CFD_TRYV(get(*tbl, "token_ttl_s", "auth", out.token_ttl_s));
+    CFD_TRYV(get(*tbl, "token_idle_s", "auth", out.token_idle_s));
     CFD_TRYV(get(*tbl, "users_file", "auth", out.users_file));
     CFD_TRYV(get(*tbl, "groups_file", "auth", out.groups_file));
     if (out.token_ttl_s == 0) {
       return invalid("auth.token_ttl_s must be > 0");
+    }
+    if (out.token_idle_s == 0) {
+      return invalid("auth.token_idle_s must be > 0");
     }
   }
 

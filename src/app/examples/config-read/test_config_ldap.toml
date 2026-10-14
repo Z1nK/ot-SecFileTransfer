@@ -1,0 +1,52 @@
+# Test config for local runs against the LDAP test instance in
+# docker/docker-compose.yml:
+#
+#   docker compose -f docker/docker-compose.yml up -d
+#   ./confide-server test_config_ldap.toml
+#
+# Needs a server built with -DWITH_LDAP=ON. Users (password = name + "123"):
+# alice, bob, carol. Groups: admins (alice), developers (alice, bob).
+# Relative paths are resolved against this file's directory.
+
+instance_name = "siteA"
+
+[storage]
+root = "data-ldap"               # kept apart from the local-users data
+
+[rest]
+bind = "127.0.0.1"
+port = 8080
+threads = 4
+
+[tls]
+enabled = false                  # local testing only
+
+[auth]
+provider = "ldap"
+token_ttl_s = 3600
+
+[auth.ldap]
+preset = "openldap"
+uri = "ldap://localhost:1389"    # plain LDAP: fine for the test container only
+timeout_s = 5
+bind_dn = "cn=admin,dc=example,dc=org"
+bind_password = "adminpassword"  # test container's admin; use bind_password_file for real setups
+user_base_dn = "ou=people,dc=example,dc=org"
+group_base_dn = "ou=groups,dc=example,dc=org"
+cache_ttl_s = 30                 # short, so directory edits show up quickly
+
+[log]
+level = "debug"
+dir = "logs-ldap"
+
+[retention]
+default_days = 1
+max_days = 7
+sweep_interval_s = 60
+
+[[peer]]
+name = "siteB"
+host = "127.0.0.1"
+port = 8081
+token = "siteA-to-siteB"
+accept_token = "siteB-to-siteA"

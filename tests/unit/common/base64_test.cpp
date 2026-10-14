@@ -1,11 +1,11 @@
-#include <auth/base64.hpp>
+#include <common/base64.hpp>
 #include <gtest/gtest.h>
 
 #include <string>
 #include <string_view>
 
-using confide::auth::base64_decode;
-using confide::auth::base64_encode;
+using confide::common::base64_decode;
+using confide::common::base64_encode;
 using confide::common::ByteSpan;
 using confide::common::ErrCode;
 

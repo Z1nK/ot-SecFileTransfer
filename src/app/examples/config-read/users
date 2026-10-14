@@ -1,0 +1,6 @@
+# name:password_hash
+alice:pbkdf2-sha256$600000$c4hstZJ0wqsxxdgnX58ieg==$WhAS8ExKgNNd+WusaymhVA/5mQdoTgMEhpoeENlVyx4=
+bob:pbkdf2-sha256$600000$oRPYhURDGIVhNs4LSVdOuw==$vKKOMtrpy0cITsaoBdlEOjJ6wzJmDtw5esO+jEbxWjc=
+carol:pbkdf2-sha256$600000$W5FMYsy8OqYyiCVp+T13Xw==$lejqmw+Yqy83yzDpl3PJoCtdN8W3LvXQgHiBBKs2cCI=
+dave:pbkdf2-sha256$600000$idaBJBQiC/mIYXzugRTRYg==$l5zvwhmIwevaGf8TDkdXKNWYn6qZ5jgorclGNtwwVXQ=
+erin:pbkdf2-sha256$600000$gogj5F1J6S4l3VRfVrVxhg==$PsgRWUD22L5UvQU1rpyvX2daIoZYHUdg43odz4gfmL0=

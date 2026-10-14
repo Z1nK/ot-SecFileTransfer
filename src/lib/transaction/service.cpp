@@ -110,6 +110,10 @@ Result<Transaction> TransactionService::create(const Caller& caller, const Creat
   if (req.retention_days < 0) {
     return fail(ErrCode::validation, "retention_days must not be negative");
   }
+  if (req.retention_days > options_.max_retention_days) {
+    return fail(ErrCode::validation, std::format("retention_days must be at most {}, got {}",
+                                                 options_.max_retention_days, req.retention_days));
+  }
 
   const bool local_target = req.target_server.empty() || req.target_server == options_.local_server;
   const std::string target_server = local_target ? std::string{} : req.target_server;

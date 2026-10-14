@@ -51,6 +51,7 @@ endif()
 # Boost.Beast / Boost.Asio (api, net) are header-only -> Boost::headers;
 # 1.83+ for asio::as_tuple with C++20 coroutines.
 # Boost.ProgramOptions: command line of the ftc client.
+set(Boost_USE_STATIC_LIBS ON)
 find_package(Boost 1.83 REQUIRED COMPONENTS json program_options)
 if(NOT Boost_FOUND)
   message(FATAL_ERROR "Boost library not found")
@@ -64,9 +65,20 @@ find_package(toml11 CONFIG REQUIRED)
 find_package(Threads REQUIRED)
 
 # LDAP authentication (ldapclient): OpenLDAP's libldap and liblber.
+# OpenLDAP < 2.5 (EL8) ships no .pc files: find it by hand and prefer the
+# thread-safe libldap_r (merged into libldap since 2.5).
 if(WITH_LDAP)
   find_package(PkgConfig REQUIRED)
-  pkg_check_modules(OPENLDAP REQUIRED IMPORTED_TARGET ldap lber)
+  pkg_check_modules(OPENLDAP QUIET IMPORTED_TARGET ldap lber)
+  if(NOT OPENLDAP_FOUND)
+    find_path(OPENLDAP_INCLUDE_DIR ldap.h REQUIRED)
+    find_library(OPENLDAP_LDAP_LIBRARY NAMES ldap_r ldap REQUIRED)
+    find_library(OPENLDAP_LBER_LIBRARY NAMES lber REQUIRED)
+    add_library(PkgConfig::OPENLDAP INTERFACE IMPORTED)
+    target_include_directories(PkgConfig::OPENLDAP INTERFACE ${OPENLDAP_INCLUDE_DIR})
+    target_link_libraries(PkgConfig::OPENLDAP INTERFACE ${OPENLDAP_LDAP_LIBRARY} ${OPENLDAP_LBER_LIBRARY})
+    message(STATUS "Found OpenLDAP: ${OPENLDAP_LDAP_LIBRARY}")
+  endif()
 endif()
 
 # -----------------------------------------------------------------------------

@@ -1,8 +1,9 @@
 set(AUTH_TEST_SOURCES
   authenticator_test.cpp
-  base64_test.cpp
   local_directory_test.cpp
+  login_limiter_test.cpp
   password_test.cpp
+  session_store_test.cpp
 )
 # The LDAP directory is tested when it is built, the stub otherwise.
 if(WITH_LDAP)

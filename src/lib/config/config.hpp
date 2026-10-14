@@ -102,7 +102,10 @@ struct AuthCfg {
   std::vector<GroupCfg> groups{};
   // group-like file with one `name:member,member,...` per line; empty = none.
   std::filesystem::path groups_file{};
-  uint32_t token_ttl_s = 3600; // will try to implement tokens
+  // User tokens from POST /auth/token: lifetime from login, and how long
+  // one may go unused before it is dropped.
+  uint32_t token_ttl_s = 3600;
+  uint32_t token_idle_s = 900;
   AuthProvider provider = AuthProvider::local;
   // Only used with provider = ldap; users/groups above stay empty then.
   LdapCfg ldap{};

@@ -4,6 +4,7 @@ add_subdirectory(config)
 add_subdirectory(auth)
 add_subdirectory(storage)
 add_subdirectory(transaction)
+add_subdirectory(retention)
 add_subdirectory(api)
 
 if(WITH_LDAP)

@@ -19,7 +19,8 @@ key = "/etc/confide/key.pem"
 
 [auth]
 provider = "local"               # "local" (users/groups below) or "ldap" (needs -DWITH_LDAP=ON)
-token_ttl_s = 3600
+token_ttl_s = 3600               # ftc login token lifetime
+token_idle_s = 900               # token dropped after this long unused
 users_file = "users"             # `name:password_hash` per line, see users.example; chmod 600
 groups_file = "groups"           # optional, `name:member,member` per line, see groups.example
 

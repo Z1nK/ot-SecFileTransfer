@@ -57,6 +57,7 @@ protected:
         std::make_unique<TransactionService>(*repo_, *store_, blog_, clock_,
                                              ServiceOptions{.local_server = "siteA",
                                                             .default_retention_days = 1,
+                                                            .max_retention_days = 7,
                                                             .check_destination = {},
                                                             .is_recipient = std::move(is_recipient),
                                                             .on_committed = {}});
@@ -128,4 +129,22 @@ TEST_F(GroupTargetTest, WithoutMembershipCheckOnlyExactName) {
   const auto tx = create_open();
   ASSERT_TRUE(service_->commit(carol_, tx.id).has_value());
   EXPECT_EQ(service_->get(alice_, tx.id).error().code, ErrCode::forbidden);
+}
+
+TEST_F(GroupTargetTest, RetentionDefaultsAndLimit) {
+  using std::chrono::days;
+  const auto now = clock_.now();
+
+  auto dflt = service_->create(carol_, CreateRequest{.target_user = "devs", .target_server = {}});
+  ASSERT_TRUE(dflt.has_value()) << dflt.error().detail;
+  EXPECT_EQ(dflt->expires_at, now + days{1});
+
+  auto at_max = service_->create(carol_, CreateRequest{.target_user = "devs", .target_server = {}, .retention_days = 7});
+  ASSERT_TRUE(at_max.has_value()) << at_max.error().detail;
+  EXPECT_EQ(at_max->expires_at, now + days{7});
+
+  EXPECT_EQ(service_->create(carol_, CreateRequest{.target_user = "devs", .target_server = {}, .retention_days = 8})
+                .error()
+                .code,
+            ErrCode::validation);
 }

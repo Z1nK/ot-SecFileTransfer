@@ -51,4 +51,9 @@ std::string encode_files(const std::vector<transaction::FileEntry>& files);
 //   {"path":"report/a.csv","size":10240,"sha256":"..."}
 std::string encode_file(const transaction::FileEntry& file);
 
+// POST /auth/token
+//   {"token":"ftu_...","user":"alice","expires_at":"..."}
+std::string encode_token(std::string_view token, std::string_view user,
+                         common::Timestamp expires_at);
+
 }  // namespace confide::api

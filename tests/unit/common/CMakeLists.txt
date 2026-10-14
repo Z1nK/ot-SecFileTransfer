@@ -1,5 +1,6 @@
 confide_add_unit_tests(common_tests
   SOURCES
+    base64_test.cpp
     error_test.cpp
     id_test.cpp
     path_sanitizer_test.cpp
