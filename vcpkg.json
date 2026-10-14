@@ -1,6 +1,6 @@
 {
   "name": "ot-secfiletransfer",
-  "version": "0.1.0",
+  "version": "0.6.0",
   "dependencies": [
     "toml11",
     "gtest"
