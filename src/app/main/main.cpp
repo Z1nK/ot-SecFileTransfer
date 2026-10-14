@@ -148,6 +148,7 @@ Result<void> serve(const config::Config& cfg, const common::IClock& clock, loggi
       transaction::ServiceOptions{
           .local_server = cfg.instance_name(),
           .default_retention_days = static_cast<int>(cfg.retention().default_days),
+          .max_retention_days = static_cast<int>(cfg.retention().max_days),
           .check_destination = destination_check(cfg, *directory),
           .is_recipient = [&dir = *directory](std::string_view user, std::string_view target) {
             return dir.is_member(user, target);
