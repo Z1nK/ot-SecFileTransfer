@@ -101,7 +101,7 @@ main(argc, argv)
     │     for each id: store.read_document(id, meta) -> decode_meta()
     │     fills the in-memory index_ (unordered_map<id, Transaction>)
     ├── transaction::TransactionService service(repo, store, blog, clock, ServiceOptions{
-    │       local_server, default_retention_days,
+    │       local_server, default_retention_days, max_retention_days,
     │       check_destination = destination_check(cfg, directory),  // FR-13 lambda
     │       is_recipient = directory.is_member(user, target),       // group targets
     │       on_committed = {} })                                    // forwarder TODO
@@ -386,7 +386,7 @@ TransactionHandlers::create(ctx)
 ├── co_await ctx.exchange.read_body_string(max_json_bytes)
 ├── decode_create(body)                                 api/json.cpp -> CreateRequest
 ├── service_.create(caller, req)
-│   ├── reject peers, empty target_user, negative retention_days
+│   ├── reject peers, empty target_user, retention_days < 0 or > max_retention_days
 │   ├── local target? (target_server empty or == local_server) -> target_server = ""
 │   ├── options_.check_destination(target_user, target_server)   // main.cpp lambda
 │   │     local: directory.has_user(user) || has_group(user)   remote: cfg.find_peer(server)
