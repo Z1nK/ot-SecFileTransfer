@@ -455,12 +455,25 @@ TEST_F(ServerTest, StopClosesIdleConnections) {
   EXPECT_TRUE(ec);  // closed by the server
 }
 
-TEST(ServerStart, BadBindAddressFails) {
+TEST(ServerStart, UnresolvableBindHostFails) {
   Router router;
   FakeAuth auth;
   confide::logging::TechLog tlog{std::make_unique<NullSink>()};
-  HttpServer server{ServerOptions{.bind = "not-an-ip", .port = 0}, router, auth, tlog};
+  // .invalid never resolves (RFC 6761).
+  HttpServer server{ServerOptions{.bind = "no-such-host.invalid", .port = 0}, router, auth, tlog};
   EXPECT_EQ(server.start().error().code, ErrCode::validation);
+}
+
+TEST(ServerStart, BindHostNameIsResolved) {
+  Router router;
+  FakeAuth auth;
+  confide::logging::TechLog tlog{std::make_unique<NullSink>()};
+  HttpServer server{ServerOptions{.bind = "localhost", .port = 0, .threads = 1}, router, auth,
+                    tlog};
+  ASSERT_TRUE(server.start());
+  EXPECT_NE(server.port(), 0);
+  server.stop();
+  server.wait();
 }
 
 TEST(ServerStart, StartTwiceFails) {

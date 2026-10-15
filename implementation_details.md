@@ -179,7 +179,7 @@ the server accepts before the handler runs:
 
 ```
 HttpServer::start()
-├── make_address(bind), acceptor.open/set_option/bind/listen
+├── make_address(bind), else resolve the host name (first address), acceptor.open/set_option/bind/listen
 ├── co_spawn(acceptor strand, Impl::accept_loop())
 └── N threads, each running ioc.run()        // N = rest.threads or hardware_concurrency
 

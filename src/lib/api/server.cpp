@@ -576,15 +576,27 @@ Result<void> HttpServer::start() {
     }
   }
 
+  // bind is an IP literal or a host name; a name is resolved once, here, and
+  // the first address of a configured family is used.
   boost::system::error_code ec;
-  const auto address = asio::ip::make_address(s.options.bind, ec);
+  auto address = asio::ip::make_address(s.options.bind, ec);
   if (ec) {
-    return fail(ErrCode::validation, "bad bind address " + s.options.bind + ": " + ec.message());
+    tcp::resolver resolver{s.ioc};
+    const auto results = resolver.resolve(s.options.bind, "", tcp::resolver::address_configured, ec);
+    if (ec || results.empty()) {
+      return fail(ErrCode::validation, "bad bind address " + s.options.bind + ": " +
+                                           (ec ? ec.message() : "no addresses"));
+    }
+    address = results.begin()->endpoint().address();
   }
   const tcp::endpoint endpoint{address, s.options.port};
 
   auto& acceptor = s.acceptor.emplace(asio::make_strand(s.ioc));
-  const auto where = s.options.bind + ":" + std::to_string(s.options.port);
+  // "host (10.1.2.3)" when bind was a name, for the error and listening messages.
+  const auto shown = address.to_string() == s.options.bind
+                         ? s.options.bind
+                         : s.options.bind + " (" + address.to_string() + ")";
+  const auto where = shown + ":" + std::to_string(s.options.port);
   if (acceptor.open(endpoint.protocol(), ec); ec) {
     return fail(ErrCode::io, "open " + where + ": " + ec.message());
   }
@@ -611,7 +623,7 @@ Result<void> HttpServer::start() {
     }
   }
 
-  s.tlog.info(kTag, "listening on {}:{} ({}, {} threads)", s.options.bind, s.port.load(),
+  s.tlog.info(kTag, "listening on {}:{} ({}, {} threads)", shown, s.port.load(),
               s.options.tls ? "https" : "http", count);
   return {};
 }

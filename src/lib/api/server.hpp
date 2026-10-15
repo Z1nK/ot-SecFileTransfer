@@ -55,8 +55,8 @@ public:
   ~HttpServer();
 
   // Binds, listens and starts the threads; returns once the server accepts
-  // connections. `validation` on a malformed bind address, `io` if it can't
-  // be bound, `internal` if already started or stopped.
+  // connections. `validation` if bind is neither an IP nor a resolvable host
+  // name, `io` if it can't be bound, `internal` if already started or stopped.
   Result<void> start();
 
   // Stops accepting and closes open connections; requests in progress fail

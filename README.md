@@ -147,7 +147,7 @@ Everything else has a default. Unknown keys give a warning in the technical log.
 |-----|---------|---------|
 | `instance_name` | — | name of this server, `[A-Za-z0-9._-]`; the `siteA` in `bob@siteA` |
 | `storage.root` | — | data folder; holds `tmp/`, `transactions/` and (by default) `logs/` |
-| `rest.bind` | `0.0.0.0` | listen address |
+| `rest.bind` | `0.0.0.0` | listen address: IP (`0.0.0.0`, `::`, `10.1.2.3`) or host name, resolved once at startup |
 | `rest.port` | `8080` | listen port |
 | `rest.threads` | `0` | worker threads, `0` = number of CPU cores |
 | `rest.request_timeout_ms` | `30000` | request timeout |
