@@ -201,6 +201,13 @@ jobs:
           ftc --help
           echo secret | confide-passwd
 
+      - name: Check server files
+        run: |
+          getent passwd confide
+          test "$(stat -c '%U:%G %a' /etc/confide/server.toml)" = "root:confide 640"
+          rpm -qc confide | grep -Fx /etc/confide/server.toml
+          test -f /usr/lib/systemd/system/confide-server.service
+
   release:
     name: Release
     needs: [build-deb, test-rpm-el8]

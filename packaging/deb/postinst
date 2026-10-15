@@ -1,0 +1,24 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = configure ]; then
+  if ! getent passwd confide >/dev/null; then
+    useradd --system --user-group --home-dir /var/lib/confide --no-create-home \
+      --shell /usr/sbin/nologin --comment "Confide server" confide
+  fi
+  # The server reads its config as the confide user; secrets live there.
+  if ! dpkg-statoverride --list /etc/confide >/dev/null; then
+    dpkg-statoverride --update --add root confide 0750 /etc/confide
+  fi
+  if ! dpkg-statoverride --list /etc/confide/server.toml >/dev/null; then
+    dpkg-statoverride --update --add root confide 0640 /etc/confide/server.toml
+  fi
+  # Not enabled or started on install: server.toml must be edited first.
+  # On upgrade a running server is restarted.
+  if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload || true
+    systemctl try-restart confide-server.service || true
+  fi
+fi
+
+exit 0

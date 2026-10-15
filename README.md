@@ -69,7 +69,36 @@ directory runs with `docker compose -f docker/docker-compose.yml up -d`; its tes
 `CONFIDE_LDAP_TEST_URI=ldap://localhost:1389 ctest --test-dir build -R Ldap`.
 
 Optional: `cmake --install build` copies `confide-server` and `confide-passwd` to
-`install/bin/`, and `cd build && cpack` makes a `.deb` package.
+`install/bin/`, and `cd build && cpack` makes a `.deb` package. The install also writes the
+config to `/etc/confide`; add `-DCONFIDE_CONFIG_DIR=etc/confide` to the configure command to
+keep it under `install/` instead.
+
+### Installing the package
+
+The `confide` package (`.deb` or `.rpm`) installs:
+
+| Path | |
+|---|---|
+| `/usr/bin/confide-server` | the server |
+| `/etc/confide/server.toml` | config, a copy of [server.example.toml](config/server.example.toml); kept on upgrade if edited |
+| `/usr/lib/systemd/system/confide-server.service` | systemd unit, the same on Ubuntu and RHEL |
+
+It also adds a `confide` system user, which runs the server. `/var/lib/confide` (storage) and
+`/var/log/confide` (logs) are created by systemd when the service starts. The service is not
+started or enabled on install, because the config has to be edited first:
+
+```bash
+sudo editor /etc/confide/server.toml          # instance name, TLS cert/key, peers
+# users file next to it, readable by the server only:
+sudo install -m 600 -o confide -g confide /dev/null /etc/confide/users
+read -rs PW && printf '%s\n' "$PW" | confide-passwd --user alice | sudo tee -a /etc/confide/users
+sudo systemctl enable --now confide-server
+journalctl -u confide-server                  # startup errors; the rest is in /var/log/confide
+```
+
+The TLS key and any other file named in the config must also be readable by the `confide`
+user (for secrets: owner `confide`, mode 600). A different `storage.root` or `log.dir` must be made writable with
+`sudo systemctl edit confide-server` (`ReadWritePaths=...`).
 
 ## 2. Configure
 
