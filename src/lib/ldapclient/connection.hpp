@@ -4,6 +4,7 @@
 
 #include "ldapclient/ldapAuth.hpp"
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -18,7 +19,7 @@ struct Entry {
   std::string first(const std::string &attribute) const;
 };
 
-enum class Scope { Base, Subtree };
+enum class Scope : std::uint8_t { Base, Subtree };
 
 class Connection {
 public:
@@ -27,6 +28,8 @@ public:
 
   Connection(const Connection &) = delete;
   Connection &operator=(const Connection &) = delete;
+  Connection(Connection &&) = delete;
+  Connection &operator=(Connection &&) = delete;
 
   // Simple bind. Throws LdapError (code 49 for bad credentials). A non-empty
   // DN with an empty password is rejected locally: servers treat it as an

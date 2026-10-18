@@ -4,6 +4,7 @@
 // directory (OpenLDAP, Active Directory, ...) and read their group
 // memberships. It never writes to the directory.
 
+#include <cstdint>
 #include <map>
 #include <optional>
 #include <stdexcept>
@@ -110,7 +111,7 @@ struct Config {
   static Config activeDirectory();
 };
 
-enum class AuthStatus {
+enum class AuthStatus : std::uint8_t {
   Success,
   InvalidCredentials, // wrong/empty password, locked or expired account
   UserNotFound,
