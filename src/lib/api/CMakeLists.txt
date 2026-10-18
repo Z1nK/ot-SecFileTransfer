@@ -9,6 +9,14 @@ add_library(${LOCAL_LIB_NAME} STATIC
   server.cpp
 )
 
+# HttpServer internals; private headers live next to them.
+target_sources(${LOCAL_LIB_NAME} PRIVATE
+  server/connections.cpp
+  server/dispatch.cpp
+  server/serve.cpp
+  server/tls.cpp
+)
+
 add_library(${PROJECT_NAMESPACE}::api-static ALIAS ${LOCAL_LIB_NAME})
 
 set_property(TARGET ${LOCAL_LIB_NAME} PROPERTY POSITION_INDEPENDENT_CODE ON)
