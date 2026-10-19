@@ -5,6 +5,13 @@ add_library(${LOCAL_LIB_NAME} STATIC
   parser.cpp
 )
 
+# Parser members, one file per group of sections.
+target_sources(${LOCAL_LIB_NAME} PRIVATE
+  parser/auth.cpp
+  parser/ldap.cpp
+  parser/sections.cpp
+)
+
 add_library(${PROJECT_NAMESPACE}::config-static ALIAS ${LOCAL_LIB_NAME})
 
 set_property(TARGET ${LOCAL_LIB_NAME} PROPERTY POSITION_INDEPENDENT_CODE ON)
@@ -15,7 +22,7 @@ target_include_directories(${LOCAL_LIB_NAME} PUBLIC
   )
 
 # config.hpp includes common/error.hpp and logging/tech_log.hpp; toml11 is
-# only used inside config.cpp.
+# only used inside config.cpp and the parser files.
 target_link_libraries(${LOCAL_LIB_NAME}
   PUBLIC
     ${PROJECT_NAMESPACE}::common-static
