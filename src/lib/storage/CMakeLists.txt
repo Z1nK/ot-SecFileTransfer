@@ -4,6 +4,13 @@ add_library(${LOCAL_LIB_NAME} STATIC
   storage.cpp
 )
 
+# FileStore internals; the private header lives next to them.
+target_sources(${LOCAL_LIB_NAME} PRIVATE
+  impl/documents.cpp
+  impl/io.cpp
+  impl/upload.cpp
+)
+
 add_library(${PROJECT_NAMESPACE}::storage-static ALIAS ${LOCAL_LIB_NAME})
 
 set_property(TARGET ${LOCAL_LIB_NAME} PROPERTY POSITION_INDEPENDENT_CODE ON)

@@ -1,16 +1,14 @@
 #include "storage/storage.hpp"
 
+#include "storage/impl/io.hpp"
+
 #include <algorithm>
 #include <atomic>
-#include <cerrno>
 #include <format>
 #include <system_error>
 
-#ifdef _WIN32
-#include <io.h>
-#else
-#include <unistd.h>
-#endif
+// Upload is in impl/upload.cpp, Download and the shared file helpers in
+// impl/io.cpp, the meta/manifest documents in impl/documents.cpp.
 
 namespace confide::storage {
 
@@ -18,36 +16,18 @@ namespace fs = std::filesystem;
 
 using common::ByteSpan;
 using common::ErrCode;
-using common::Error;
 using common::RelativePath;
 using common::Sha256;
-using common::Sha256Digest;
 using common::TransactionId;
+using detail::fail;
+using detail::io_error;
+using detail::open_file;
 
 namespace {
 
 constexpr std::string_view kTmpDir = "tmp";
 constexpr std::string_view kTransactionsDir = "transactions";
 constexpr std::string_view kFilesDir = "files";
-
-// Error details name only the relative path or transaction id, never the
-// absolute storage root: `api` may pass the detail on to the client.
-std::unexpected<Error> fail(ErrCode code, std::string detail) {
-  return std::unexpected(Error::make(code, std::move(detail)));
-}
-
-std::unexpected<Error> io_error(std::string_view what, std::string_view subject,
-                                std::error_code ec) {
-  return fail(ErrCode::io, std::format("storage: {} '{}': {}", what, subject, ec.message()));
-}
-
-std::error_code last_errno() {
-  return {errno, std::generic_category()};
-}
-
-std::unexpected<Error> finished() {
-  return fail(ErrCode::internal, "storage: upload already finished");
-}
 
 // Unique temp file name within this process. tmp/ is cleared on startup and
 // one storage dir belongs to one server, so a counter is enough.
@@ -56,186 +36,12 @@ std::string next_tmp_name(const TransactionId& id) {
   return std::format("{}-{}.part", id.str(), counter.fetch_add(1, std::memory_order_relaxed));
 }
 
-Result<detail::FilePtr> open_file(const fs::path& p, const char* mode, std::string_view subject) {
-  detail::FilePtr f{std::fopen(p.string().c_str(), mode)};  // NOLINT(cppcoreguidelines-owning-memory)
-  if (!f) {
-    const auto ec = last_errno();
-    if (ec == std::errc::no_such_file_or_directory) {
-      return fail(ErrCode::notfound, std::format("storage: no such file '{}'", subject));
-    }
-    return io_error("open", subject, ec);
-  }
-  return f;
-}
-
-// Pushes buffered data to the OS and then to disk, so the rename that follows
-// never publishes a file whose content is still only in memory.
-Result<void> sync_file(std::FILE* f, std::string_view subject) {
-  if (std::fflush(f) != 0) {
-    return io_error("flush", subject, last_errno());
-  }
-#ifdef _WIN32
-  if (::_commit(::_fileno(f)) != 0) {
-#else
-  if (::fsync(::fileno(f)) != 0) {
-#endif
-    return io_error("fsync", subject, last_errno());
-  }
-  return {};
-}
-
 bool is_regular(const fs::path& p) {
   std::error_code ec;
   return fs::is_regular_file(p, ec);
 }
 
 }  // namespace
-
-std::string_view file_name(Document doc) {
-  switch (doc) {
-  case Document::meta:
-    return "meta.json";
-  case Document::manifest:
-    return "manifest.json";
-  }
-  return "unknown";
-}
-
-void detail::FileCloser::operator()(std::FILE* f) const noexcept {
-  std::fclose(f);  // NOLINT(cppcoreguidelines-owning-memory)
-}
-
-// --- Upload -----------------------------------------------------------------
-
-Upload::Upload(detail::FilePtr file, Sha256 hasher, fs::path tmp_path, fs::path final_path,
-               RelativePath path)
-    : file_(std::move(file))
-    , hasher_(std::move(hasher))
-    , tmp_path_(std::move(tmp_path))
-    , final_path_(std::move(final_path))
-    , path_(std::move(path)) {}
-
-Upload::Upload(Upload&& other) noexcept
-    : file_(std::move(other.file_))
-    , hasher_(std::move(other.hasher_))
-    , tmp_path_(std::move(other.tmp_path_))
-    , final_path_(std::move(other.final_path_))
-    , path_(std::move(other.path_))
-    , size_(other.size_)
-    , done_(std::exchange(other.done_, true)) {}
-
-Upload& Upload::operator=(Upload&& other) noexcept {
-  if (this != &other) {
-    if (!done_) {
-      discard();
-    }
-    file_ = std::move(other.file_);
-    hasher_ = std::move(other.hasher_);
-    tmp_path_ = std::move(other.tmp_path_);
-    final_path_ = std::move(other.final_path_);
-    path_ = std::move(other.path_);
-    size_ = other.size_;
-    done_ = std::exchange(other.done_, true);
-  }
-  return *this;
-}
-
-Upload::~Upload() {
-  if (!done_) {
-    discard();
-  }
-}
-
-void Upload::discard() noexcept {
-  done_ = true;
-  file_.reset();
-  std::error_code ec;
-  fs::remove(tmp_path_, ec);
-}
-
-Result<void> Upload::write(ByteSpan chunk) {
-  if (done_) {
-    return finished();
-  }
-  if (chunk.empty()) {
-    return {};
-  }
-  if (std::fwrite(chunk.data(), 1, chunk.size(), file_.get()) != chunk.size()) {
-    const auto ec = last_errno();
-    discard();
-    return io_error("write", path_.str(), ec);
-  }
-  if (auto r = hasher_.update(chunk); !r) {
-    discard();
-    return std::unexpected(std::move(r).error());
-  }
-  size_ += chunk.size();
-  return {};
-}
-
-Result<void> Upload::write(std::string_view chunk) {
-  return write(std::as_bytes(std::span{chunk.data(), chunk.size()}));
-}
-
-Result<StoredFile> Upload::commit(const std::optional<Sha256Digest>& expected) {
-  if (done_) {
-    return finished();
-  }
-  auto result = finish(expected);
-  if (!result) {
-    discard();
-  }
-  return result;
-}
-
-Result<StoredFile> Upload::finish(const std::optional<Sha256Digest>& expected) {
-  CFD_TRYV(sync_file(file_.get(), path_.str()));
-  if (std::fclose(file_.release()) != 0) {  // NOLINT(cppcoreguidelines-owning-memory)
-    return io_error("close", path_.str(), last_errno());
-  }
-
-  CFD_TRY(digest, hasher_.finish());
-  if (expected && *expected != digest) {
-    return fail(ErrCode::integrity,
-                std::format("storage: checksum mismatch for '{}': expected {}, got {}",
-                            path_.str(), expected->to_hex(), digest.to_hex()));
-  }
-
-  // "a/b" can't be stored when "a" is a file, and "a" can't replace a
-  // directory "a/": both are a clash inside the transaction, not a disk fault.
-  std::error_code ec;
-  fs::create_directories(final_path_.parent_path(), ec);
-  if (ec == std::errc::file_exists || ec == std::errc::not_a_directory) {
-    return fail(ErrCode::conflict,
-                std::format("storage: a parent of '{}' is a file", path_.str()));
-  }
-  if (ec) {
-    return io_error("create directories for", path_.str(), ec);
-  }
-  if (fs::is_directory(final_path_, ec)) {
-    return fail(ErrCode::conflict, std::format("storage: '{}' is a directory", path_.str()));
-  }
-
-  fs::rename(tmp_path_, final_path_, ec);
-  if (ec) {
-    return io_error("rename", path_.str(), ec);
-  }
-  done_ = true;
-  return StoredFile{.path=path_, .size=size_, .sha256=digest};
-}
-
-// --- Download ---------------------------------------------------------------
-
-Result<std::size_t> Download::read(std::span<std::byte> buf) {
-  if (!file_) {
-    return fail(ErrCode::internal, "storage: read after move");
-  }
-  const std::size_t n = std::fread(buf.data(), 1, buf.size(), file_.get());
-  if (n < buf.size() && std::ferror(file_.get()) != 0) {
-    return io_error("read", "download", last_errno());
-  }
-  return n;
-}
 
 // --- FileStore --------------------------------------------------------------
 
@@ -422,36 +228,6 @@ Result<std::vector<FileInfo>> FileStore::list_files(const TransactionId& id) con
     return io_error("list files of", id.str(), ec);
   }
   std::ranges::sort(out, {}, &FileInfo::path);
-  return out;
-}
-
-Result<void> FileStore::write_document(const TransactionId& id, Document doc,
-                                       std::string_view content) {
-  const auto name = file_name(doc);
-  CFD_TRY(rel, RelativePath::parse(name));
-  CFD_TRY(upload, begin_write(id, transaction_dir(id) / name, std::move(rel)));
-  CFD_TRYV(upload.write(content));
-  if (auto r = upload.commit(); !r) {
-    return std::unexpected(std::move(r).error());
-  }
-  return {};
-}
-
-Result<std::string> FileStore::read_document(const TransactionId& id, Document doc) const {
-  const auto name = file_name(doc);
-  CFD_TRY(file, open_file(transaction_dir(id) / name, "rb", name));
-  std::string out;
-  char buf[4096];  // NOLINT(cppcoreguidelines-avoid-c-arrays)
-  while (true) {
-    const std::size_t n = std::fread(buf, 1, sizeof(buf), file.get());
-    out.append(buf, n);
-    if (n < sizeof(buf)) {
-      if (std::ferror(file.get()) != 0) {
-        return io_error("read", name, last_errno());
-      }
-      break;
-    }
-  }
   return out;
 }
 
