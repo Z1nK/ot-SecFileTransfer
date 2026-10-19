@@ -78,8 +78,8 @@ set(CPACK_DEBIAN_SERVER_PACKAGE_CONTROL_EXTRA
   ${CMAKE_CURRENT_SOURCE_DIR}/packaging/deb/postrm)
 set(CPACK_DEBIAN_PACKAGE_CONTROL_STRICT_PERMISSION ON)
 
-# RPM (EL8 CI job runs `cpack -G RPM`): same three components,
-# <name>-<version>-1.el8.<arch>.rpm, Requires: from the linked shared libraries.
+# RPM (EL8/EL9 CI jobs run `cpack -G RPM`): same three components,
+# <name>-<version>-1.el<N>.<arch>.rpm, Requires: from the linked shared libraries.
 set(CPACK_RPM_COMPONENT_INSTALL ON)
 set(CPACK_RPM_SERVER_PACKAGE_NAME confide)
 set(CPACK_RPM_UTILS_PACKAGE_NAME confide-utils)
