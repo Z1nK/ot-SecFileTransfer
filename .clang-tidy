@@ -32,3 +32,6 @@ CheckOptions:
     value: true
   - key: hicpp-special-member-functions.AllowSoleDefaultDtor
     value: true
+  - key: bugprone-easily-swappable-parameters.MinimumLength
+    value: 3        # only warn for 3+ adjacent same-typed params
+
