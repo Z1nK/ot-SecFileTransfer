@@ -11,7 +11,9 @@ Each release is split into two parts:
 
 ## [Unreleased] — HEAD
 
-Changes since `v0.6.0`, not tagged yet.
+Changes since `v0.7.0`, not tagged yet.
+
+## [0.7.0] — 2026-10-20
 
 ### Business logic
 
