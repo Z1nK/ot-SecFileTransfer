@@ -59,8 +59,8 @@ using DestinationCheck =
 using MembershipCheck = std::function<bool(std::string_view user, std::string_view target)>;
 
 // Called after a successful commit, outside the transaction lock. `main`
-// wires it to ForwardQueue::enqueue for remote targets, so this module does
-// not depend on `forwarder`.
+// wires it to forwarder::Forwarder::enqueue for remote targets, so this
+// module does not depend on `forwarder`.
 using CommitHook = std::function<void(const Transaction&)>;
 
 struct ServiceOptions {
@@ -166,6 +166,15 @@ public:
   Result<Transaction> receive(const Caller& peer, const ReceiveRequest& req);
 
   // --- Forwarder and retention --------------------------------------------
+
+  // Committed transactions created here for a user on another server, i.e.
+  // the ones still to be forwarded. Oldest first.
+  std::vector<common::TransactionId> list_outgoing() const;
+
+  // One of list_outgoing(), with its files. `notfound` if it does not exist,
+  // `conflict` if it is not a committed transaction for another server (not
+  // committed yet, already delivered, expired, or local).
+  Result<Transaction> outgoing(const common::TransactionId& id) const;
 
   // committed -> delivered, after the peer confirmed the push.
   Result<void> mark_delivered(const common::TransactionId& id);
