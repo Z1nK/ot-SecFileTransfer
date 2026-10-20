@@ -62,7 +62,8 @@ Both presets use the same directory `build/`. Binaries go to `build/bin/`:
 | `*_tests` | unit tests (one per module) |
 | `example-*` | small examples, not needed to run the server |
 
-To build without tests, add `-DWITH_GOOGLE_TEST=OFF` to the configure command.
+To build without tests, add `-DWITH_GOOGLE_TEST=OFF` to the configure command; without the
+examples, `-DWITH_EXAMPLES=OFF`.
 
 LDAP login (`auth.provider = "ldap"`, see [server.example.toml](config/server.example.toml)) is
 optional: add `-DWITH_LDAP=ON` and install OpenLDAP (`sudo apt install libldap-dev`). A test

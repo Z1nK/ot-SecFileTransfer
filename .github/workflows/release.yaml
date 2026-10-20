@@ -55,7 +55,8 @@ jobs:
           cmake --preset ${{ env.CONFIGURE_PRESET }} \
             -DCMAKE_CXX_COMPILER=g++-14 \
             -DCMAKE_C_COMPILER=gcc-14 \
-            -DAPP_VERSION=${{ env.VERSION }}
+            -DAPP_VERSION=${{ env.VERSION }} \
+            -DWITH_EXAMPLES=OFF
 
       - name: Build
         run: cmake --build --preset ${{ env.CONFIGURE_PRESET }}
@@ -147,7 +148,8 @@ jobs:
           g++ --version
           cmake --preset ${{ env.CONFIGURE_PRESET }} \
             -DAPP_VERSION=${{ env.VERSION }} \
-            -DVCPKG_MANIFEST_FEATURES=boost
+            -DVCPKG_MANIFEST_FEATURES=boost \
+            -DWITH_EXAMPLES=OFF
 
       - name: Build
         run: cmake --build --preset ${{ env.CONFIGURE_PRESET }}

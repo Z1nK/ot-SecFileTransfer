@@ -1,4 +1,6 @@
 add_subdirectory(cli)
-add_subdirectory(examples)
+if(WITH_EXAMPLES)
+  add_subdirectory(examples)
+endif()
 add_subdirectory(main)
 add_subdirectory(passwd)
