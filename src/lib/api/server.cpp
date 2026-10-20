@@ -76,7 +76,19 @@ Result<void> HttpServer::start() {
   if (acceptor.listen(asio::socket_base::max_listen_connections, ec); ec) {
     return fail(ErrCode::io, "listen " + where + ": " + ec.message());
   }
-  s.port = acceptor.local_endpoint().port();
+  // Some kernels (WSL2 with mirrored networking, on a port Windows keeps
+  // for itself) bind another port and address without an error; peers and
+  // clients configured for the requested one would never reach us.
+  const auto bound = acceptor.local_endpoint(ec);
+  if (ec) {
+    return fail(ErrCode::io, "local endpoint " + where + ": " + ec.message());
+  }
+  if ((s.options.port != 0 && bound.port() != s.options.port) || bound.address() != address) {
+    return fail(ErrCode::io, std::format("bind {}: the system bound {}:{} instead; is the port "
+                                         "reserved by the host?",
+                                         where, bound.address().to_string(), bound.port()));
+  }
+  s.port = bound.port();
 
   asio::co_spawn(acceptor.get_executor(), s.accept_loop(), asio::detached);
 
