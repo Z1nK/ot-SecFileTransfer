@@ -50,6 +50,15 @@ Result<std::string_view> get_string(const json::object& obj, std::string_view ke
   return std::string_view{v->get_string()};
 }
 
+// Absent or null -> "". Older meta.json files have no "comment".
+Result<std::string_view> get_optional_string(const json::object& obj, std::string_view key) {
+  const auto* v = obj.if_contains(key);
+  if (v == nullptr || v->is_null()) {
+    return std::string_view{};
+  }
+  return get_string(obj, key);
+}
+
 // Like get_string() but also rejects "".
 Result<std::string_view> get_name(const json::object& obj, std::string_view key) {
   CFD_TRY(s, get_string(obj, key));
@@ -150,6 +159,7 @@ std::string encode_meta(const Transaction& tx) {
       {"target_user", tx.target_user},
       {"target_server", tx.target_server},
       {"origin_server", tx.origin_server},
+      {"comment", tx.comment},
       {"state", to_string(tx.state)},
       {"created_at", common::format_iso8601(tx.created_at)},
       {"expires_at", common::format_iso8601(tx.expires_at)},
@@ -174,6 +184,7 @@ Result<Transaction> decode_meta(std::string_view text) {
   CFD_TRY(target_user, get_name(obj, "target_user"));
   CFD_TRY(target_server, get_string(obj, "target_server"));
   CFD_TRY(origin_server, get_string(obj, "origin_server"));
+  CFD_TRY(comment, get_optional_string(obj, "comment"));
   CFD_TRY(state_text, get_string(obj, "state"));
   CFD_TRY(state, in_field("state", parse_state(state_text)));
   CFD_TRY(created_at, get_timestamp(obj, "created_at"));
@@ -188,6 +199,7 @@ Result<Transaction> decode_meta(std::string_view text) {
       .target_user = std::string{target_user},
       .target_server = std::string{target_server},
       .origin_server = std::string{origin_server},
+      .comment = std::string{comment},
       .state = state,
       .created_at = created_at,
       .expires_at = expires_at,
