@@ -12,13 +12,13 @@
 // never appears in `ps`. An http:// server needs --allow-http, since the
 // password and token would travel unencrypted.
 
-#include "http_client.hpp"
 #include "token_cache.hpp"
 
 #include <common/error.hpp>
 #include <common/id.hpp>
 #include <common/path_sanitizer.hpp>
 #include <common/sha256.hpp>
+#include <net/http_client.hpp>
 #include <openssl/crypto.h>
 #include <termios.h>
 #include <unistd.h>
@@ -52,7 +52,7 @@ namespace po = boost::program_options;
 using http_verb = boost::beast::http::verb;
 
 using namespace confide;
-using cli::HttpClient;
+using net::HttpClient;
 using common::ErrCode;
 using common::Error;
 using common::Result;
@@ -188,7 +188,7 @@ bool can_ask_password() {
 }
 
 // Asks for the password, trades it for a token and saves the token.
-Result<cli::Login> login(HttpClient& client, const std::string& user,
+Result<net::Login> login(HttpClient& client, const std::string& user,
                          const cli::TokenCache& cache) {
   CFD_TRY(password, read_password(user));
   auto reply = client.login({.user = user, .password = password});
@@ -213,7 +213,7 @@ Result<Session> open_session(const Global& global) {
   if (global.user.empty()) {
     return fail(ErrCode::validation, "no user: use --user or FTC_USER");
   }
-  CFD_TRY(url, cli::ServerUrl::parse(global.server));
+  CFD_TRY(url, net::ServerUrl::parse(global.server));
   // Without TLS anyone on the network can read the password and the token.
   // Checked before the password is asked for.
   if (!url.tls) {
@@ -225,7 +225,7 @@ Result<Session> open_session(const Global& global) {
     std::cerr << "ftc: warning: plain http, the password and token are sent unencrypted\n";
   }
   CFD_TRY(cache, cli::TokenCache::for_server(url, global.user));
-  CFD_TRY(client, HttpClient::create(std::move(url), global.ca_file));
+  CFD_TRY(client, HttpClient::create(std::move(url), {.ca_file = global.ca_file, .user_agent = "ftc"}));
   return Session{.client = std::move(client), .cache = std::move(cache)};
 }
 
@@ -396,7 +396,7 @@ Result<void> cmd_send(const Global& global, const po::variables_map& vm) {
   auto upload_all = [&]() -> Result<void> {
     for (const auto& file : files) {
       CFD_TRY(sha, hash_file(file.source));
-      CFD_TRYV(client.upload(tx_target(id) + "/files/" + cli::url_encode_path(file.path.str()),
+      CFD_TRYV(client.upload(tx_target(id) + "/files/" + net::url_encode_path(file.path.str()),
                              file.source, sha));
       std::cout << "  " << file.path.str() << '\n';
     }
@@ -493,7 +493,7 @@ Result<void> cmd_get(const Global& global, const po::variables_map& vm) {
     auto part = out;
     part += ".part";
     auto checked = [&]() -> Result<void> {
-      CFD_TRYV(client.download(tx_target(id) + "/files/" + cli::url_encode_path(rel.str()), part));
+      CFD_TRYV(client.download(tx_target(id) + "/files/" + net::url_encode_path(rel.str()), part));
       CFD_TRY(actual, hash_file(part));
       if (actual != expected) {
         return fail(ErrCode::integrity, rel.str() + ": SHA-256 does not match the server's");

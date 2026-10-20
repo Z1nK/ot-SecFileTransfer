@@ -1,17 +1,21 @@
 #pragma once
-#include <common/error.hpp>
-#include <common/sha256.hpp>
+#include "common/error.hpp"
+#include "common/sha256.hpp"
 
 #include <boost/beast/http/verb.hpp>
 
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 
-namespace confide::cli {
+namespace confide::net {
 
 using common::Result;
 
@@ -38,22 +42,38 @@ struct Login {
   std::string expires_at;  // ISO 8601, UTC
 };
 
-// Blocking HTTP/1.1 client for the REST API (Architecture §8). Requests
-// carry a user token ("Bearer"), got once from login() with the password.
-// One connection per call, so there is no connection state to keep in sync
-// with the server.
+struct ClientOptions {
+  // PEM bundle to verify an https server; system CAs if unset.
+  std::optional<std::filesystem::path> ca_file{};
+  // Longest wait for a single connect, read or write; 0 = no limit. An idle
+  // limit, not a total one: a long transfer is fine as long as bytes move.
+  std::chrono::milliseconds io_timeout{0};
+  std::string user_agent = "confide";
+};
+
+// A request body pulled in chunks, for upload() from something that is not
+// a plain file. `read` fills the buffer and returns how many bytes it wrote;
+// it must deliver exactly `size` bytes in total.
+struct BodySource {
+  std::uint64_t size = 0;
+  std::function<Result<std::size_t>(std::span<std::byte>)> read;
+};
+
+// Blocking HTTP/1.1 client for the REST API (Architecture §8). Used by `ftc`
+// with a user token and by the forwarder with a peer token, both sent as
+// "Bearer". One connection per call, so there is no connection state to
+// keep in sync with the server.
 //
-// Errors: a network or TLS failure is `unavailable`; an error response gives
-// the ErrCode named in its {"error","detail"} body.
+// Errors: a network or TLS failure, a timeout or cancel() is `unavailable`;
+// an error response gives the ErrCode named in its {"error","detail"} body.
 class HttpClient {
 public:
   // Called when the server rejects the token (`auth`): returns a new token,
   // usually from login(), or an error that ends the request.
   using Relogin = std::function<Result<std::string>(HttpClient&)>;
 
-  // `ca_file`: PEM bundle to verify an https server; system CAs if unset.
-  static Result<HttpClient> create(ServerUrl url,
-                                   const std::optional<std::filesystem::path>& ca_file);
+  // `validation` if the CA bundle can't be loaded.
+  static Result<HttpClient> create(ServerUrl url, ClientOptions options = {});
 
   // POST /auth/token with the password (Basic); the only request that sends
   // it. On success the client uses the new token from then on.
@@ -68,6 +88,10 @@ public:
   // the token it returns.
   void on_expired(Relogin relogin);
 
+  // Aborts the request in progress, and every later one, with `unavailable`.
+  // The only call that may come from another thread.
+  void cancel();
+
   HttpClient(HttpClient&&) noexcept;
   HttpClient& operator=(HttpClient&&) noexcept;
   HttpClient(const HttpClient&) = delete;
@@ -81,6 +105,12 @@ public:
   // PUT `file` as the body, streamed, with its digest in X-Checksum-SHA256.
   // Returns the response body (the stored file entry).
   Result<std::string> upload(std::string_view target, const std::filesystem::path& file,
+                             const common::Sha256Digest& sha256);
+
+  // Same, with the body pulled from `source`. Not retried after a relogin,
+  // since the source can't be rewound; an error from `source` itself is
+  // returned as it is.
+  Result<std::string> upload(std::string_view target, BodySource source,
                              const common::Sha256Digest& sha256);
 
   // GET `target` and stream the body into `out` (created or truncated).
@@ -102,4 +132,4 @@ private:
 // characters (RFC 3986) are left as they are.
 std::string url_encode_path(std::string_view path);
 
-}  // namespace confide::cli
+}  // namespace confide::net
