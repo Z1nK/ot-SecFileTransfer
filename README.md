@@ -375,14 +375,38 @@ Notes:
 
 ## 5. Check
 
-### Unit tests
+### Tests
 
 ```bash
-ctest --preset x64-debug-linux
+ctest --preset x64-debug-linux              # unit and end-to-end tests
+ctest --preset x64-debug-linux -L integration   # only the end-to-end test
 ```
 
 or one module: `build/bin/transaction_tests`, `build/bin/api_tests`, and so on
 (all GoogleTest, so `--gtest_filter=...` works).
+
+The end-to-end test [tests/integration/two_sites.sh](tests/integration/two_sites.sh)
+starts two servers with TLS on this machine and runs `ftc` against them: a local
+transfer, a transfer forwarded from siteA to siteB, the immutability and unknown
+destination checks, and a transfer that waits while siteB is down. It needs
+`openssl` and `curl`, and keeps its folder with the logs if it fails:
+
+```bash
+tests/integration/two_sites.sh build/bin
+```
+
+### Benchmark and memory
+
+[tests/bench/bench.sh](tests/bench/bench.sh) sends 1000 small files and one large
+file (2 GiB by default) through two servers with TLS, forwarding the large one, and
+prints times, throughput and the peak memory of both servers and `ftc`. It fails if a
+download differs from what was sent, or if a process peaks above 100 MiB (NFR-4).
+Use a Release build, and a `TMPDIR` with four times the file size free:
+
+```bash
+TMPDIR=/var/tmp tests/bench/bench.sh build/bin            # 2048 MiB, 1000 files
+tests/bench/bench.sh build/bin 256 200                    # quicker
+```
 
 ### Manual checks
 
