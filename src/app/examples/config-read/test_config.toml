@@ -32,5 +32,5 @@ sweep_interval_s = 60
 name = "siteB"
 host = "127.0.0.1"
 port = 8081
-token = "siteA-to-siteB"
-accept_token = "siteB-to-siteA"
+token = "siteA-to-siteB-example-only-0123456789"
+accept_token = "siteB-to-siteA-example-only-0123456789"

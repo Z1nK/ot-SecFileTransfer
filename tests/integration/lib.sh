@@ -53,7 +53,8 @@ site_init() {
 }
 
 # site_config NAME [PEER...] : writes server.toml. Every pair of sites shares
-# two tokens, one per direction.
+# two tokens, one per direction (fixed per pair, so both configs agree; at
+# least 32 characters, as the config requires).
 site_config() {
   local name=$1
   shift
@@ -91,8 +92,8 @@ EOF
 name = "$peer"
 host = "localhost"
 port = ${SITE_PORT[$peer]}
-token = "token-$name-to-$peer"
-accept_token = "token-$peer-to-$name"
+token = "test-token-$name-to-$peer-0123456789abcdef"
+accept_token = "test-token-$peer-to-$name-0123456789abcdef"
 EOF
   done
 }

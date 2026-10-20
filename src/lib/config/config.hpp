@@ -125,9 +125,15 @@ struct RetentionCfg {
   uint32_t sweep_interval_s = 3600;
 };
 
+// Shortest peer token the config accepts, e.g. `openssl rand -hex 32` (64).
+inline constexpr std::size_t kMinPeerTokenLength = 32;
+
 // one server we can forward committed transactions to. `token` is
 // the one WE present to `name`; `accept_token` is the one `name` must
-// present to us -- never reuse one secret in both directions.
+// present to us -- never reuse one secret in both directions. Both are at
+// least kMinPeerTokenLength visible ASCII characters, not starting with
+// "ftu_" (user tokens), and every secret appears once across all peers:
+// the accept_token alone tells which peer is calling.
 struct PeerCfg {
   std::string name;
   std::string host;

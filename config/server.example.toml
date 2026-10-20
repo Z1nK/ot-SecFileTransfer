@@ -65,5 +65,10 @@ sweep_interval_s = 3600
 name = "siteB"
 host = "siteb.example.org"
 port = 8080
-token = "<token we send to siteB>"
-accept_token = "<token siteB sends to us>"
+# Two shared secrets per pair of servers, one per direction: siteB's config
+# has the same two values the other way round. Make each with
+#   openssl rand -hex 32
+# (at least 32 characters, no spaces, not starting with ftu_), and use a
+# different pair for every peer.
+token = "<secret we send to siteB = siteB's accept_token for siteA>"
+accept_token = "<secret siteB sends to us = siteB's token for siteA>"

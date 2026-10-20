@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <string>
 #include <string_view>
@@ -92,8 +93,8 @@ sweep_interval_s = 60
 name = "siteB"
 host = "b.example"
 port = 8443
-token = "out"
-accept_token = "in"
+token = "out-0123456789abcdef0123456789abcdef"
+accept_token = "in-0123456789abcdef0123456789abcdef"
 )");
   ASSERT_TRUE(cfg.has_value()) << cfg.error().detail;
   EXPECT_EQ(cfg->rest().bind, "127.0.0.1");
@@ -115,8 +116,8 @@ accept_token = "in"
   ASSERT_NE(peer, nullptr);
   EXPECT_EQ(peer->host, "b.example");
   EXPECT_EQ(peer->port, 8443);
-  EXPECT_EQ(peer->token, "out");
-  EXPECT_EQ(peer->accept_token, "in");
+  EXPECT_EQ(peer->token, "out-0123456789abcdef0123456789abcdef");
+  EXPECT_EQ(peer->accept_token, "in-0123456789abcdef0123456789abcdef");
   EXPECT_EQ(cfg->find_peer("siteC"), nullptr);
   EXPECT_TRUE(cfg->warnings().empty());
 }
@@ -168,18 +169,60 @@ TEST(ConfigLoader, UserRules) {
                  "duplicate user");
 }
 
+// [[peer]] block for `name` with the given secrets.
+std::string peer_block(std::string_view name, std::string_view token, std::string_view accept) {
+  return std::format(
+      "[[peer]]\nname = \"{}\"\nhost = \"h\"\ntoken = \"{}\"\naccept_token = \"{}\"\n", name, token,
+      accept);
+}
+
 TEST(ConfigLoader, PeerRules) {
-  const std::string ok = "host = \"h\"\ntoken = \"t1\"\naccept_token = \"t2\"\n";
+  const std::string t1 = "t1-0123456789abcdef0123456789abcdef";
+  const std::string t2 = "t2-0123456789abcdef0123456789abcdef";
+  const std::string ok = "host = \"h\"\ntoken = \"" + t1 + "\"\naccept_token = \"" + t2 + "\"\n";
   expect_invalid(with("[[peer]]\nname = \"siteA\"\n" + ok), "own name");
   expect_invalid(with("[[peer]]\nname = \"b\"\n" + ok + "[[peer]]\nname = \"b\"\n" + ok),
                  "duplicate peer");
-  expect_invalid(with("[[peer]]\nname = \"b\"\ntoken = \"t1\"\naccept_token = \"t2\"\n"),
-                 "host is required");
-  expect_invalid(with("[[peer]]\nname = \"b\"\nhost = \"h\"\ntoken = \"t1\"\n"),
-                 "accept_token");
   expect_invalid(
-      with("[[peer]]\nname = \"b\"\nhost = \"h\"\ntoken = \"same\"\naccept_token = \"same\"\n"),
-      "must differ");
+      with("[[peer]]\nname = \"b\"\ntoken = \"" + t1 + "\"\naccept_token = \"" + t2 + "\"\n"),
+      "host is required");
+  expect_invalid(with("[[peer]]\nname = \"b\"\nhost = \"h\"\ntoken = \"" + t1 + "\"\n"),
+                 "accept_token");
+  expect_invalid(with(peer_block("b", t1, t1)), "must differ");
+}
+
+TEST(ConfigLoader, PeerTokenRules) {
+  const std::string t1 = "t1-0123456789abcdef0123456789abcdef";
+  const std::string t2 = "t2-0123456789abcdef0123456789abcdef";
+  const std::string t3 = "t3-0123456789abcdef0123456789abcdef";
+  const std::string t4 = "t4-0123456789abcdef0123456789abcdef";
+  ASSERT_TRUE(ConfigLoader::from_string(with(peer_block("b", t1, t2) + peer_block("c", t3, t4))));
+
+  // Exactly kMinPeerTokenLength is enough, one less is not.
+  const std::string min(confide::config::kMinPeerTokenLength, 'x');
+  EXPECT_TRUE(ConfigLoader::from_string(with(peer_block("b", min, t2))));
+  expect_invalid(with(peer_block("b", min.substr(1), t2)), "peer[0].token must be at least 32");
+  expect_invalid(with(peer_block("b", t1, "short")), "peer[0].accept_token must be at least 32");
+
+  expect_invalid(with(peer_block("b", t1 + " x", t2)), "visible ASCII");
+  expect_invalid(with(peer_block("b", t1, "ftu_" + t2)), "must not start with ftu_");
+
+  // Shared accept_token: the second peer couldn't be told from the first.
+  expect_invalid(with(peer_block("b", t1, t2) + peer_block("c", t3, t2)),
+                 "peer[1].accept_token is the same secret as peer[0].accept_token");
+  // Shared token: one peer could pose as us to the other.
+  expect_invalid(with(peer_block("b", t1, t2) + peer_block("c", t1, t4)),
+                 "peer[1].token is the same secret as peer[0].token");
+  // Across directions too.
+  expect_invalid(with(peer_block("b", t1, t2) + peer_block("c", t2, t4)),
+                 "peer[1].token is the same secret as peer[0].accept_token");
+}
+
+TEST(ConfigLoader, PeerTokenErrorsDoNotShowTheSecret) {
+  const std::string secret = "ftu_0123456789abcdef0123456789abcdef";
+  auto cfg = ConfigLoader::from_string(with(peer_block("b", secret, "x")));
+  ASSERT_FALSE(cfg.has_value());
+  EXPECT_EQ(cfg.error().detail.find(secret), std::string::npos) << cfg.error().detail;
 }
 
 TEST(ConfigLoader, UnknownKeysWarn) {
@@ -200,8 +243,8 @@ TEST(ConfigLoader, FromFileMissingIsIo) {
 
 TEST(ConfigLoader, FromFileResolvesRelativePaths) {
   const fs::path dir = fs::temp_directory_path()
-      / (std::string{"confide_config_test_"}
-         + ::testing::UnitTest::GetInstance()->current_test_info()->name());
+                       / (std::string{"confide_config_test_"}
+                          + ::testing::UnitTest::GetInstance()->current_test_info()->name());
   fs::create_directories(dir);
   const fs::path file = dir / "server.toml";
   {
@@ -221,8 +264,8 @@ namespace {
 // A config file plus a users file in a fresh temp folder; removed on scope exit.
 struct UsersFixture {
   fs::path dir = fs::temp_directory_path()
-      / (std::string{"confide_users_test_"}
-         + ::testing::UnitTest::GetInstance()->current_test_info()->name());
+                 / (std::string{"confide_users_test_"}
+                    + ::testing::UnitTest::GetInstance()->current_test_info()->name());
   fs::path config = dir / "server.toml";
   fs::path users = dir / "users";
 
@@ -473,8 +516,8 @@ TEST(ConfigLoader, LdapSectionIgnoredWithLocal) {
 
 TEST(ConfigLoader, LdapBindPasswordFile) {
   const fs::path dir = fs::temp_directory_path()
-      / (std::string{"confide_ldap_test_"}
-         + ::testing::UnitTest::GetInstance()->current_test_info()->name());
+                       / (std::string{"confide_ldap_test_"}
+                          + ::testing::UnitTest::GetInstance()->current_test_info()->name());
   fs::remove_all(dir);
   fs::create_directories(dir);
   const fs::path secret = dir / "ldap_bind";

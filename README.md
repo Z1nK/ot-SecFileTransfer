@@ -196,7 +196,15 @@ Everything else has a default. Unknown keys give a warning in the technical log.
 | `retention.sweep_interval_s` | `3600` | how often to look for expired transactions |
 | `[[peer]]` `name`, `host`, `port` | port `8080` | another server that transactions can be sent to |
 | `[[peer]]` `token` | — | secret this server sends to the peer |
-| `[[peer]]` `accept_token` | — | secret the peer must send to us (`Authorization: Bearer ...`). Use a different secret than `token` |
+| `[[peer]]` `accept_token` | — | secret the peer must send to us (`Authorization: Bearer ...`) |
+
+Peer tokens are shared secrets you make yourself, two per pair of servers (one per
+direction), e.g. with `openssl rand -hex 32`. siteA's `token` for siteB is siteB's
+`accept_token` for siteA, and the other way round. The config refuses a token shorter
+than 32 characters, one with spaces or control characters, one starting with `ftu_`
+(the prefix of user tokens), and any secret used twice, in the same block or across
+peers: the `accept_token` alone tells the server which peer is calling. The server
+keeps only their SHA-256 in memory and compares in constant time.
 
 Peers are called over https when `[tls] enabled = true` (the same switch as our own
 API) and verified with `tls.ca`, so both servers must use TLS or both not. The peer's

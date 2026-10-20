@@ -1,7 +1,9 @@
 #include "config/parser.hpp"
 
+#include <algorithm>
 #include <format>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -9,6 +11,26 @@
 namespace confide::config::detail {
 
 namespace fs = std::filesystem;
+
+namespace {
+
+// Why `secret` can't be a peer token, or "" if it can. Never names the secret.
+std::string token_problem(std::string_view secret) {
+  if (secret.size() < kMinPeerTokenLength) {
+    return std::format("must be at least {} characters (e.g. openssl rand -hex 32)",
+                       kMinPeerTokenLength);
+  }
+  // Sent as `Authorization: Bearer <token>`: no spaces or control characters.
+  if (!std::ranges::all_of(secret, [](char c) { return c > ' ' && c < 0x7F; })) {
+    return "must be visible ASCII characters only (no spaces)";
+  }
+  if (secret.starts_with("ftu_")) {
+    return "must not start with ftu_ (the prefix of user tokens)";
+  }
+  return {};
+}
+
+}  // namespace
 
 Result<void> Parser::parse_storage(StorageCfg& out) {
   CFD_TRY(tbl, section(root_, "storage"));
@@ -128,6 +150,8 @@ Result<void> Parser::parse_peers(std::vector<PeerCfg>& out, const std::string& i
     return invalid("peer: expected an array of tables ([[peer]])");
   }
   std::unordered_set<std::string> seen;
+  // Every token and accept_token of every peer, with where it was set.
+  std::vector<std::pair<std::string, std::string>> secrets;
   std::size_t i = 0;
   for (const auto& p : peers.as_array()) {
     const std::string where = std::format("peer[{}]", i++);
@@ -162,6 +186,23 @@ Result<void> Parser::parse_peers(std::vector<PeerCfg>& out, const std::string& i
     }
     if (peer.token == peer.accept_token) {
       return invalid(std::format("{}: token and accept_token must differ", where));
+    }
+    for (const auto& [key, secret] :
+         {std::pair{"token", &peer.token}, std::pair{"accept_token", &peer.accept_token}}) {
+      const std::string field = std::format("{}.{}", where, key);
+      if (const auto problem = token_problem(*secret); !problem.empty()) {
+        return invalid(std::format("{} {}", field, problem));
+      }
+      // A shared accept_token makes two peers indistinguishable; a shared
+      // token lets one peer pose as us to the other.
+      const auto other = std::ranges::find(secrets, *secret, &decltype(secrets)::value_type::first);
+      if (other != secrets.end()) {
+        return invalid(
+            std::format("{} is the same secret as {}; use a different one for "
+                        "each peer and direction",
+                        field, other->second));
+      }
+      secrets.emplace_back(*secret, field);
     }
     out.push_back(std::move(peer));
   }

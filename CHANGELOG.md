@@ -24,6 +24,9 @@ Changes since `v0.7.0`, not tagged yet.
 - Optional `comment` on a transaction (`ftc send --comment`), at most 256 characters, carried along when forwarded.
 - `rest.bind` accepts a host name as well as an IP address (`0.0.0.0`, `::`, `10.1.2.3`). The name is resolved once at startup.
 
+#### Changed
+- **Stricter peer tokens** (may refuse an existing config): `[[peer]]` `token` and `accept_token` must be at least 32 visible ASCII characters (e.g. `openssl rand -hex 32`), must not start with `ftu_`, and every secret may be used only once across all peers and directions. Before, a shared `accept_token` made two peers indistinguishable, and the last one in the file won.
+
 #### Fixed
 - `ftc get` failed on files larger than 8 MiB (`body limit exceeded`).
 - The server refuses to start if the system binds a different port or address than configured (seen on WSL2 for ports Windows keeps for itself), instead of silently listening where no client or peer will look.
