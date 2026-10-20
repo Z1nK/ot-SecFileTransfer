@@ -102,6 +102,7 @@ json::object transaction_object(const transaction::Transaction& tx) {
       {"sender", tx.sender},
       {"target_user", tx.target_user},
       {"target_server", tx.target_server},
+      {"comment", tx.comment},
       {"created_at", common::format_iso8601(tx.created_at)},
       {"expires_at", common::format_iso8601(tx.expires_at)},
   };
@@ -123,10 +124,12 @@ Result<transaction::CreateRequest> decode_create(std::string_view text) {
   CFD_TRY(target_user, get_name(obj, "target_user"));
   CFD_TRY(target_server, get_optional_string(obj, "target_server"));
   CFD_TRY(retention_days, get_optional_int(obj, "retention_days"));
+  CFD_TRY(comment, get_optional_string(obj, "comment"));
   return transaction::CreateRequest{
       .target_user = std::string{target_user},
       .target_server = std::string{target_server},
       .retention_days = retention_days,
+      .comment = std::string{comment},
   };
 }
 
@@ -138,12 +141,14 @@ Result<transaction::ReceiveRequest> decode_receive(std::string_view text) {
   CFD_TRY(target_user, get_name(obj, "target_user"));
   CFD_TRY(created_at, get_timestamp(obj, "created_at"));
   CFD_TRY(expires_at, get_timestamp(obj, "expires_at"));
+  CFD_TRY(comment, get_optional_string(obj, "comment"));
   return transaction::ReceiveRequest{
       .id = std::move(id),
       .sender = std::string{sender},
       .target_user = std::string{target_user},
       .created_at = created_at,
       .expires_at = expires_at,
+      .comment = std::string{comment},
   };
 }
 
@@ -154,6 +159,7 @@ std::string encode_receive(const transaction::ReceiveRequest& req) {
       {"target_user", req.target_user},
       {"created_at", common::format_iso8601(req.created_at)},
       {"expires_at", common::format_iso8601(req.expires_at)},
+      {"comment", req.comment},
   });
 }
 

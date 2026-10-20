@@ -224,7 +224,7 @@ sequenceDiagram
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| POST | `/transactions` | Create (body: `target_user`, `target_server`, `retention_days`) |
+| POST | `/transactions` | Create (body: `target_user`, `target_server`, `retention_days`, `comment`) |
 | GET | `/transactions?box=in\|out` | List my incoming or outgoing transactions |
 | GET | `/transactions/{id}` | Details and state |
 | PUT | `/transactions/{id}/files/{path}` | Upload a file (streamed body, header `X-Checksum-SHA256`) |

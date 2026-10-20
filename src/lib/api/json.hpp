@@ -16,15 +16,17 @@ using common::Result;
 // --- Requests ---------------------------------------------------------------
 
 // POST /transactions
-//   {"target_user":"bob","target_server":"siteB","retention_days":30}
-// target_server and retention_days are optional. `validation` on malformed
+//   {"target_user":"bob","target_server":"siteB","retention_days":30,
+//    "comment":"Q3 reports"}
+// target_server, retention_days and comment are optional; the comment's
+// length is checked by TransactionService. `validation` on malformed
 // JSON, a missing or empty target_user, or a non-integer retention_days.
 Result<transaction::CreateRequest> decode_create(std::string_view json);
 
 // POST /internal/transactions (peer push, Architecture §7)
 //   {"id":"...","sender":"alice","target_user":"bob",
-//    "created_at":"...","expires_at":"..."}
-// Same errors as decode_create(), plus a bad id or timestamp.
+//    "created_at":"...","expires_at":"...","comment":"..."}
+// comment is optional. Same errors as decode_create(), plus a bad id or timestamp.
 Result<transaction::ReceiveRequest> decode_receive(std::string_view json);
 
 // The body decode_receive() reads; used by the forwarder on the other side.
@@ -34,7 +36,7 @@ std::string encode_receive(const transaction::ReceiveRequest& req);
 
 // GET /transactions/{id}, and the answer to create, receive and commit:
 //   {"id":"...","state":"open","sender":"alice","target_user":"bob",
-//    "target_server":"siteB","created_at":"...","expires_at":"...",
+//    "target_server":"siteB","comment":"...","created_at":"...","expires_at":"...",
 //    "committed_at":"...","file_count":2,"total_bytes":12345}
 // Optional times are left out while unset.
 std::string encode_transaction(const transaction::Transaction& tx);

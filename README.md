@@ -261,7 +261,7 @@ User requests carry either HTTP Basic auth (`curl -u user:password`) or a user t
 |--------|------|---------|
 | `POST` | `/auth/token` | log in: Basic auth only (a token can't get a new token); answers `{"token": "ftu_...", "user": "alice", "expires_at": "..."}` |
 | `DELETE` | `/auth/token` | log out: the Bearer token of the request stops working |
-| `POST` | `/transactions` | create; body `{"target_user": "bob", "target_server": "", "retention_days": 30}` (only `target_user` is required) |
+| `POST` | `/transactions` | create; body `{"target_user": "bob", "target_server": "", "retention_days": 30, "comment": "Q3 reports"}` (only `target_user` is required; `comment` is at most 256 characters, no control characters) |
 | `GET` | `/transactions?box=in\|out` | my incoming (default) or outgoing transactions |
 | `GET` | `/transactions/{id}` | one transaction and its state |
 | `PUT` | `/transactions/{id}/files/{path}` | upload a file (raw body). Optional header `X-Checksum-SHA256: <hex>` |
