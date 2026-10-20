@@ -8,6 +8,7 @@
 #include <boost/asio/strand.hpp>
 
 #include <algorithm>
+#include <format>
 #include <mutex>
 #include <string>
 #include <thread>

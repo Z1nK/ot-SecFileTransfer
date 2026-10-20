@@ -15,6 +15,10 @@ so committed remote transactions stay `committed`).
 ┌──────────────────────────────────────────────────────────────────────┐
 │ app/main/main.cpp         wiring, signals                            │
 ├──────────────────────────────────────────────────────────────────────┤
+│ forwarder/forwarder.cpp   pushes committed remote transactions to    │
+│                           peers (worker thread, retries), §5.10      │
+│ retention/scheduler.cpp   deletes expired transactions (worker)      │
+├──────────────────────────────────────────────────────────────────────┤
 │ api/server.cpp            HttpServer: sockets, TLS, HTTP parsing,    │
 │                           SessionExchange (implements api::Exchange) │
 │ api/router.cpp            Router: method + path -> Route             │
@@ -103,7 +107,9 @@ main(argc, argv)
     │       local_server, default_retention_days, max_retention_days,
     │       check_destination = destination_check(cfg, directory),  // FR-13 lambda
     │       is_recipient = directory.is_member(user, target),       // group targets
-    │       on_committed = {} })                                    // forwarder TODO
+    │       on_committed = forward->enqueue(tx.id) if tx.target_server set })
+    ├── forwarder::Forwarder forwarding(service, store, tlog, forwarder_options(cfg))
+    │     one forwarder::Peer per [[peer]]: https if [tls] enabled, tls.ca to verify
     ├── api::TransactionHandlers handlers(service, blog, tlog)
     ├── api::Router router
     ├── handlers.register_routes(router)                  // see §3
@@ -123,9 +129,11 @@ main(argc, argv)
     │                   service.expire(id)                // -> expired, delete folder,
     │                                                     //    blog `expired`
     │                 failures -> tlog.warn, retried next sweep
+    ├── forwarding.start()     // queues service.list_outgoing(), worker thread, see §5.10
     ├── no TLS -> tlog.warn("passwords travel unencrypted")
     ├── signal_io.run()        // blocks main thread until a signal
     ├── server.wait()          // joins the server's worker threads
+    ├── forwarding.stop()      // cancels a push in progress, joins the worker
     └── retention.stop()       // wakes the worker (condition_variable), joins it
 ```
 
@@ -577,6 +585,44 @@ AuthHandlers::logout(ctx)                      // Access::user
 
 Logout with Basic credentials is accepted and does nothing.
 
+### 5.10 Forwarding (sending side, FR-10)
+
+[forwarder/forwarder.cpp](src/lib/forwarder/forwarder.cpp). Not a route: a
+worker thread on the sender's server that calls the peer's `/internal` API
+(§5.8) with [net::HttpClient](src/lib/net/http_client.hpp).
+
+```
+service.commit(alice, id)              // target_server = "siteB"
+└── on_committed(tx) -> forwarding.enqueue(id)        // after the lock is released
+
+Forwarder::run()                       // one worker thread, one push at a time
+├── wait until the earliest Pending.due (enqueue() and stop() wake it)
+├── push(id)
+│   ├── service.outgoing(id)           // committed, created here, target_server set
+│   ├── peer = options.peers[tx.target_server]       // else `unknown_destination`
+│   ├── HttpClient::create(peer.url, {tls.ca, io_timeout = 5 min})
+│   │     set_token(peer.token); registered so stop() can cancel() it
+│   ├── POST /internal/transactions    encode_receive(id, sender, target_user, times, comment)
+│   │     409 = an earlier attempt got this far:
+│   │       GET /internal/transactions/{id} -> "open": send the files again
+│   │                                        else: only the confirmation got lost
+│   ├── for each FileEntry: PUT /internal/transactions/{id}/files/{path}
+│   │     body streamed from store.open_read() in 256 KiB chunks,
+│   │     X-Checksum-SHA256 = entry.sha256 (the peer checks it, NFR-6)
+│   ├── POST /internal/transactions/{id}/commit     // peer re-hashes, logs `received`
+│   └── service.mark_delivered(id)     // committed -> delivered, blog `forwarded`
+└── on error:
+      unavailable / throttled / internal / io / integrity
+          -> back into the queue, due in 5 s, 10 s, 20 s ... capped at 10 min
+      anything else (unknown user on the peer, wrong peer token, ...)
+          -> tlog.error, dropped; stays `committed` and is queued again on next start
+```
+
+`forwarding.start()` queues everything `service.list_outgoing()` returns, so
+a push cut short by a restart is redone. Every network operation of the
+client has an idle timeout (`io_timeout`) and `stop()` cancels a push in
+progress, so shutdown never waits for a stalled peer.
+
 ---
 
 ## 6. End-to-end sequence (upload example)
@@ -649,6 +695,7 @@ HttpServer::Impl::stop()
 └── for each tracked connection: post(conn strand): stream.close()
       -> pending reads/writes fail, coroutines finish, Upload destructors delete temp files
 main: signal_io.run() returns -> server.wait() joins all threads
+      -> forwarding.stop() (cancels a push in progress; redone on next start)
       -> retention.stop() (lets a running sweep finish) -> return 0
 ```
 
@@ -665,20 +712,24 @@ main: signal_io.run() returns -> server.wait() joins all threads
   `invalid user name or password`.
 - **Business log** (`business.log`, `logging::BusinessLog::record(BizEvent)`):
   one event per business action: `tx_created`, `file_added`, `file_removed`,
-  `committed`, `received`, `downloaded`, `expired` (retention sweep), plus
-  `forwarded` from the not-yet-wired `mark_delivered()`.
+  `committed`, `received`, `downloaded`, `expired` (retention sweep), and
+  `forwarded` once the peer confirmed a push (`mark_delivered()`).
 - The retention sweep also writes to the technical log (tag `retention`):
   start/stop, a summary line when a sweep removed something, and a warning
   per failed `expire()`.
+- The forwarder (tag `forwarder`): start/stop, how many transactions were
+  left from before, one line per delivered transaction, a warning per failed
+  attempt with the time until the retry, and an error when it gives up.
 
 ---
 
 ## 10. Client (`ftc`)
 
 [app/cli/main.cpp](src/app/cli/main.cpp),
-[http_client.cpp](src/app/cli/http_client.cpp),
-[token_cache.cpp](src/app/cli/token_cache.cpp). A separate executable; it
-shares only `common` with the server.
+[token_cache.cpp](src/app/cli/token_cache.cpp), and the HTTP client
+[net/http_client.cpp](src/lib/net/http_client.cpp), which the server's
+forwarder uses too. A separate executable; it shares only `common` and `net`
+with the server.
 
 ```
 main -> cmd_<command>(global, vm)
@@ -689,7 +740,7 @@ main -> cmd_<command>(global, vm)
     │   ├── http:// without --allow-http -> refuse (before any password is asked)
     │   ├── TokenCache::for_server(url, user)
     │   │     $XDG_STATE_HOME/ftc/tokens/<user>@<host>_<port>  (~/.local/state if unset)
-    │   └── HttpClient::create(url, ca_file)
+    │   └── HttpClient::create(url, {ca_file})            // no io_timeout
     ├── cache.load()
     │     folder 0700 / file 0600; readable or replaceable by others -> refuse
     │     token found -> client.set_token(token)        // "Authorization: Bearer ftu_..."
