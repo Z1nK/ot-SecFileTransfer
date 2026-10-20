@@ -1,22 +1,32 @@
 #pragma once
 
-// Internal to the config library: only config.cpp and parser.cpp include
-// this. Everyone else goes through ConfigLoader.
+// Internal to the config library: only config.cpp and the parser*.cpp files
+// include this. Parser's members are split by section: parser.cpp (entry
+// point, getters), parser/sections.cpp, parser/auth.cpp, parser/ldap.cpp. Everyone else goes through ConfigLoader.
 
 #include "config/config.hpp"
 
 #include <toml.hpp>
 
+#include <cstdint>
+#include <expected>
 #include <filesystem>
+#include <format>
 #include <initializer_list>
 #include <istream>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <type_traits>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace confide::config::detail {
+
+inline std::unexpected<common::Error> invalid(std::string detail) {
+  return std::unexpected(common::Error::make(common::ErrCode::validation, std::move(detail)));
+}
 
 // Turns one TOML document into a validated Config. Every getter leaves the
 // target untouched when the key is absent, so the struct defaults in
@@ -82,5 +92,25 @@ private:
   std::filesystem::path base_dir_;
   std::vector<std::string> warnings_;
 };
+
+template <class T>
+  requires std::is_unsigned_v<T>
+Result<void> Parser::get(const toml::value& tbl, const std::string& key, std::string_view where,
+                         T& out) {
+  if (!tbl.contains(key)) {
+    return {};
+  }
+  const auto& v = tbl.at(key);
+  if (!v.is_integer()) {
+    return invalid(std::format("{}.{}: expected an integer", where, key));
+  }
+  const auto n = v.as_integer();
+  if (n < 0 || static_cast<std::uint64_t>(n) > std::numeric_limits<T>::max()) {
+    return invalid(std::format("{}.{}: {} is out of range [0, {}]", where, key, n,
+                               std::numeric_limits<T>::max()));
+  }
+  out = static_cast<T>(n);
+  return {};
+}
 
 }  // namespace confide::config::detail

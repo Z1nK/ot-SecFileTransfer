@@ -12,13 +12,13 @@
 // never appears in `ps`. An http:// server needs --allow-http, since the
 // password and token would travel unencrypted.
 
-#include "http_client.hpp"
 #include "token_cache.hpp"
 
 #include <common/error.hpp>
 #include <common/id.hpp>
 #include <common/path_sanitizer.hpp>
 #include <common/sha256.hpp>
+#include <net/http_client.hpp>
 #include <openssl/crypto.h>
 #include <termios.h>
 #include <unistd.h>
@@ -52,7 +52,7 @@ namespace po = boost::program_options;
 using http_verb = boost::beast::http::verb;
 
 using namespace confide;
-using cli::HttpClient;
+using net::HttpClient;
 using common::ErrCode;
 using common::Error;
 using common::Result;
@@ -67,7 +67,7 @@ constexpr std::string_view kCommands = R"(Commands:
   login                 ask for the password and save a token for later
                         commands (any command logs in first if needed)
   logout                end the session on the server and delete the token
-  send --to USER[@SERVER] [--retention DAYS] PATH...
+  send --to USER[@SERVER] [--retention DAYS] [--comment TEXT] PATH...
                         create a transaction, upload the files and folders,
                         commit
   inbox                 list transactions sent to you
@@ -188,7 +188,7 @@ bool can_ask_password() {
 }
 
 // Asks for the password, trades it for a token and saves the token.
-Result<cli::Login> login(HttpClient& client, const std::string& user,
+Result<net::Login> login(HttpClient& client, const std::string& user,
                          const cli::TokenCache& cache) {
   CFD_TRY(password, read_password(user));
   auto reply = client.login({.user = user, .password = password});
@@ -213,7 +213,7 @@ Result<Session> open_session(const Global& global) {
   if (global.user.empty()) {
     return fail(ErrCode::validation, "no user: use --user or FTC_USER");
   }
-  CFD_TRY(url, cli::ServerUrl::parse(global.server));
+  CFD_TRY(url, net::ServerUrl::parse(global.server));
   // Without TLS anyone on the network can read the password and the token.
   // Checked before the password is asked for.
   if (!url.tls) {
@@ -225,7 +225,7 @@ Result<Session> open_session(const Global& global) {
     std::cerr << "ftc: warning: plain http, the password and token are sent unencrypted\n";
   }
   CFD_TRY(cache, cli::TokenCache::for_server(url, global.user));
-  CFD_TRY(client, HttpClient::create(std::move(url), global.ca_file));
+  CFD_TRY(client, HttpClient::create(std::move(url), {.ca_file = global.ca_file, .user_agent = "ftc"}));
   return Session{.client = std::move(client), .cache = std::move(cache)};
 }
 
@@ -380,6 +380,9 @@ Result<void> cmd_send(const Global& global, const po::variables_map& vm) {
   if (vm.contains("retention")) {
     body["retention_days"] = vm["retention"].as<int>();
   }
+  if (vm.contains("comment")) {
+    body["comment"] = vm["comment"].as<std::string>();
+  }
 
   CFD_TRY(files, collect_files(vm["path"].as<std::vector<std::string>>()));
   CFD_TRY(client, connect(global));
@@ -393,7 +396,7 @@ Result<void> cmd_send(const Global& global, const po::variables_map& vm) {
   auto upload_all = [&]() -> Result<void> {
     for (const auto& file : files) {
       CFD_TRY(sha, hash_file(file.source));
-      CFD_TRYV(client.upload(tx_target(id) + "/files/" + cli::url_encode_path(file.path.str()),
+      CFD_TRYV(client.upload(tx_target(id) + "/files/" + net::url_encode_path(file.path.str()),
                              file.source, sha));
       std::cout << "  " << file.path.str() << '\n';
     }
@@ -414,8 +417,8 @@ Result<void> cmd_list(const Global& global, std::string_view box) {
   CFD_TRY(list, parse_list(reply, "transactions"));
 
   const bool in = box == "in";
-  std::cout << std::format("{:<36}  {:<9}  {:<24}  {:>5}  {:>12}  {}\n", "ID", "STATE",
-                           in ? "FROM" : "TO", "FILES", "BYTES", "CREATED");
+  std::cout << std::format("{:<36}  {:<9}  {:<24}  {:>5}  {:>12}  {:<20}  {}\n", "ID", "STATE",
+                           in ? "FROM" : "TO", "FILES", "BYTES", "CREATED", "COMMENT");
   for (const auto& v : list) {
     if (!v.is_object()) {
       continue;
@@ -423,9 +426,9 @@ Result<void> cmd_list(const Global& global, std::string_view box) {
     const auto& tx = v.get_object();
     const auto peer =
         in ? std::string{str(tx, "sender")} : address(tx, "target_user", "target_server");
-    std::cout << std::format("{:<36}  {:<9}  {:<24}  {:>5}  {:>12}  {}\n", str(tx, "id"),
+    std::cout << std::format("{:<36}  {:<9}  {:<24}  {:>5}  {:>12}  {:<20}  {}\n", str(tx, "id"),
                              str(tx, "state"), peer, num(tx, "file_count"), num(tx, "total_bytes"),
-                             str(tx, "created_at"));
+                             str(tx, "created_at"), str(tx, "comment"));
   }
   return {};
 }
@@ -490,7 +493,7 @@ Result<void> cmd_get(const Global& global, const po::variables_map& vm) {
     auto part = out;
     part += ".part";
     auto checked = [&]() -> Result<void> {
-      CFD_TRYV(client.download(tx_target(id) + "/files/" + cli::url_encode_path(rel.str()), part));
+      CFD_TRYV(client.download(tx_target(id) + "/files/" + net::url_encode_path(rel.str()), part));
       CFD_TRY(actual, hash_file(part));
       if (actual != expected) {
         return fail(ErrCode::integrity, rel.str() + ": SHA-256 does not match the server's");
@@ -549,7 +552,7 @@ int run_command(const std::string& command, const std::vector<std::string>& args
                 const Global& global) {
   const auto synopsis = [&]() -> std::string_view {
     if (command == "send") {
-      return " --to USER[@SERVER] [--retention DAYS] PATH...";
+      return " --to USER[@SERVER] [--retention DAYS] [--comment TEXT] PATH...";
     }
     if (command == "show" || command == "files") {
       return " ID";
@@ -570,7 +573,9 @@ int run_command(const std::string& command, const std::vector<std::string>& args
                        po::value<std::string>()->required()->value_name("USER|GROUP[@SERVER]"),
                        "receiver, a user or a group; without @SERVER one on the same server")(
         "retention,r", po::value<int>()->value_name("DAYS"),
-        "days to keep the transaction (server default if not set)");
+        "days to keep the transaction (server default if not set)")(
+        "comment,m", po::value<std::string>()->value_name("TEXT"),
+        "short note shown in inbox/outbox (at most 256 characters)");
     hidden.add_options()("path", po::value<std::vector<std::string>>()->required());
     pos.add("path", -1);
     run = cmd_send;

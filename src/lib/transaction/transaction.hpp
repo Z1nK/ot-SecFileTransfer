@@ -5,6 +5,7 @@
 #include "common/sha256.hpp"
 #include "common/time.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -14,6 +15,15 @@
 namespace confide::transaction {
 
 using common::Result;
+
+// Default upper bound for Transaction::comment, in Unicode code points
+// (not bytes). ServiceOptions::max_comment_length overrides it.
+inline constexpr std::size_t kMaxCommentLength = 256;
+
+// `validation` if `comment` is longer than `max_length` code points or holds
+// control characters (newline, tab, ...): it is shown on one line in lists.
+// `comment` must be valid UTF-8, as Boost.JSON guarantees for parsed input.
+Result<void> check_comment(std::string_view comment, std::size_t max_length);
 
 // Lifecycle of a transaction (Architecture §5). Rules for moving between
 // states live in state_machine.hpp.
@@ -48,6 +58,7 @@ struct Transaction {
   std::string target_user;
   std::string target_server;  // empty = target user is on this server
   std::string origin_server;  // empty = created here; else the peer that pushed it
+  std::string comment{};      // free text from the sender, may be empty
   State state = State::open;
   common::Timestamp created_at;
   common::Timestamp expires_at;

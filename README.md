@@ -16,13 +16,14 @@ See [Requirements.md](Requirements.md) and [Architecture.md](Architecture.md) fo
 
 | Works now | Not done yet |
 |-----------|--------------|
-| create / upload / delete / commit / list / download over REST | forwarding to a peer server (transactions to `user@otherServer` stay `committed`) |
+| create / upload / delete / commit / list / download over REST | resume of an interrupted upload (FR-15, "could") |
+| forwarding to a peer (`bob@siteB`): pushed after commit, retried with backoff while the peer is down, `delivered` once it confirmed | |
 | TLS on/off | |
 | retention: expired transactions are deleted every `sweep_interval_s` | |
 | Basic auth and user tokens (`ftc login`), login throttling, access rules, path checks | |
 | business and technical logs, log rotation | |
-| `/internal/...` peer endpoints (receiving side) | |
 | `ftc` client: `login`, `logout`, `send`, `inbox`, `outbox`, `show`, `files`, `get` | |
+| unit tests, a two-server end-to-end test, a benchmark with a memory check | |
 
 ## 1. Build
 
@@ -69,7 +70,36 @@ directory runs with `docker compose -f docker/docker-compose.yml up -d`; its tes
 `CONFIDE_LDAP_TEST_URI=ldap://localhost:1389 ctest --test-dir build -R Ldap`.
 
 Optional: `cmake --install build` copies `confide-server` and `confide-passwd` to
-`install/bin/`, and `cd build && cpack` makes a `.deb` package.
+`install/bin/`, and `cd build && cpack` makes a `.deb` package. The install also writes the
+config to `/etc/confide`; add `-DCONFIDE_CONFIG_DIR=etc/confide` to the configure command to
+keep it under `install/` instead.
+
+### Installing the package
+
+The `confide` package (`.deb` or `.rpm`) installs:
+
+| Path | |
+|---|---|
+| `/usr/bin/confide-server` | the server |
+| `/etc/confide/server.toml` | config, a copy of [server.example.toml](config/server.example.toml); kept on upgrade if edited |
+| `/usr/lib/systemd/system/confide-server.service` | systemd unit, the same on Ubuntu and RHEL |
+
+It also adds a `confide` system user, which runs the server. `/var/lib/confide` (storage) and
+`/var/log/confide` (logs) are created by systemd when the service starts. The service is not
+started or enabled on install, because the config has to be edited first:
+
+```bash
+sudo editor /etc/confide/server.toml          # instance name, TLS cert/key, peers
+# users file next to it, readable by the server only:
+sudo install -m 600 -o confide -g confide /dev/null /etc/confide/users
+read -rs PW && printf '%s\n' "$PW" | confide-passwd --user alice | sudo tee -a /etc/confide/users
+sudo systemctl enable --now confide-server
+journalctl -u confide-server                  # startup errors; the rest is in /var/log/confide
+```
+
+The TLS key and any other file named in the config must also be readable by the `confide`
+user (for secrets: owner `confide`, mode 600). A different `storage.root` or `log.dir` must be made writable with
+`sudo systemctl edit confide-server` (`ReadWritePaths=...`).
 
 ## 2. Configure
 
@@ -147,7 +177,7 @@ Everything else has a default. Unknown keys give a warning in the technical log.
 |-----|---------|---------|
 | `instance_name` | — | name of this server, `[A-Za-z0-9._-]`; the `siteA` in `bob@siteA` |
 | `storage.root` | — | data folder; holds `tmp/`, `transactions/` and (by default) `logs/` |
-| `rest.bind` | `0.0.0.0` | listen address |
+| `rest.bind` | `0.0.0.0` | listen address: IP (`0.0.0.0`, `::`, `10.1.2.3`) or host name, resolved once at startup |
 | `rest.port` | `8080` | listen port |
 | `rest.threads` | `0` | worker threads, `0` = number of CPU cores |
 | `rest.request_timeout_ms` | `30000` | request timeout |
@@ -167,6 +197,18 @@ Everything else has a default. Unknown keys give a warning in the technical log.
 | `[[peer]]` `name`, `host`, `port` | port `8080` | another server that transactions can be sent to |
 | `[[peer]]` `token` | — | secret this server sends to the peer |
 | `[[peer]]` `accept_token` | — | secret the peer must send to us (`Authorization: Bearer ...`). Use a different secret than `token` |
+
+Peers are called over https when `[tls] enabled = true` (the same switch as our own
+API) and verified with `tls.ca`, so both servers must use TLS or both not. The peer's
+certificate must name `host`. Each pair of servers shares two tokens, one per direction:
+siteA's `token` is siteB's `accept_token` for siteA, and the other way round.
+
+After a commit to `bob@siteB`, siteA pushes the transaction to siteB in the
+background and marks it `delivered`; `ftc show ID` on siteA tells you which. If
+siteB can't be reached, siteA retries after 5 s, 10 s, 20 s ... up to every 10
+minutes, and again after a restart. Errors that a retry can't fix (no user `bob` on
+siteB, wrong token) are logged in siteA's `technical.log`; the transaction then
+stays `committed` until the next start.
 
 ### Minimal local config
 
@@ -232,7 +274,7 @@ User requests carry either HTTP Basic auth (`curl -u user:password`) or a user t
 |--------|------|---------|
 | `POST` | `/auth/token` | log in: Basic auth only (a token can't get a new token); answers `{"token": "ftu_...", "user": "alice", "expires_at": "..."}` |
 | `DELETE` | `/auth/token` | log out: the Bearer token of the request stops working |
-| `POST` | `/transactions` | create; body `{"target_user": "bob", "target_server": "", "retention_days": 30}` (only `target_user` is required) |
+| `POST` | `/transactions` | create; body `{"target_user": "bob", "target_server": "", "retention_days": 30, "comment": "Q3 reports"}` (only `target_user` is required; `comment` is at most 256 characters, no control characters) |
 | `GET` | `/transactions?box=in\|out` | my incoming (default) or outgoing transactions |
 | `GET` | `/transactions/{id}` | one transaction and its state |
 | `PUT` | `/transactions/{id}/files/{path}` | upload a file (raw body). Optional header `X-Checksum-SHA256: <hex>` |
@@ -338,6 +380,7 @@ build/bin/ftc --allow-http -u bob get $ID downloads
 Notes:
 
 - `--to bob@siteB` sends to a user on another server, `--retention DAYS` sets `retention_days`.
+- `--comment "Q3 reports"` (`-m`) attaches a short note, shown in the COMMENT column of `inbox`/`outbox`.
 - `ftc outbox` lists the transactions you sent.
 - `get` does not overwrite existing files unless you add `--force`.
 - If an upload fails, `send` prints the id of the transaction it left `open`.
@@ -345,14 +388,38 @@ Notes:
 
 ## 5. Check
 
-### Unit tests
+### Tests
 
 ```bash
-ctest --preset x64-debug-linux
+ctest --preset x64-debug-linux              # unit and end-to-end tests
+ctest --preset x64-debug-linux -L integration   # only the end-to-end test
 ```
 
 or one module: `build/bin/transaction_tests`, `build/bin/api_tests`, and so on
 (all GoogleTest, so `--gtest_filter=...` works).
+
+The end-to-end test [tests/integration/two_sites.sh](tests/integration/two_sites.sh)
+starts two servers with TLS on this machine and runs `ftc` against them: a local
+transfer, a transfer forwarded from siteA to siteB, the immutability and unknown
+destination checks, and a transfer that waits while siteB is down. It needs
+`openssl` and `curl`, and keeps its folder with the logs if it fails:
+
+```bash
+tests/integration/two_sites.sh build/bin
+```
+
+### Benchmark and memory
+
+[tests/bench/bench.sh](tests/bench/bench.sh) sends 1000 small files and one large
+file (2 GiB by default) through two servers with TLS, forwarding the large one, and
+prints times, throughput and the peak memory of both servers and `ftc`. It fails if a
+download differs from what was sent, or if a process peaks above 100 MiB (NFR-4).
+Use a Release build, and a `TMPDIR` with four times the file size free:
+
+```bash
+TMPDIR=/var/tmp tests/bench/bench.sh build/bin            # 2048 MiB, 1000 files
+tests/bench/bench.sh build/bin 256 200                    # quicker
+```
 
 ### Manual checks
 
@@ -395,7 +462,11 @@ With the server running and the flow above done, these should hold:
 ```
 src/app/main/      confide-server entry point
 src/app/passwd/    confide-passwd
-src/lib/           common, config, logging, storage, auth, transaction, api
+src/app/cli/       ftc
+src/lib/           common, config, logging, storage, auth, transaction, retention,
+                   net (HTTP client, shared by ftc and forwarder), api, forwarder
 tests/unit/        GoogleTest unit tests, one folder per module
+tests/integration/ end-to-end test with two servers
+tests/bench/       benchmark and memory check
 config/            example server config
 ```

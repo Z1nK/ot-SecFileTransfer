@@ -1,7 +1,6 @@
 #pragma once
-#include "http_client.hpp"
-
 #include <common/error.hpp>
+#include <net/http_client.hpp>
 
 #include <filesystem>
 #include <optional>
@@ -9,6 +8,9 @@
 #include <string_view>
 
 namespace confide::cli {
+
+using common::Result;
+using net::ServerUrl;
 
 // The user token `ftc login` got from one server, for one user, kept in
 //

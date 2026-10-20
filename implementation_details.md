@@ -4,8 +4,8 @@ This document describes how the code works **today**: which function calls
 which, from process start to a byte landing on disk and the response going
 back. For the target design see [Architecture.md](Architecture.md).
 
-Not implemented yet: the forwarder (`ServiceOptions::on_committed` is empty,
-so committed remote transactions stay `committed`).
+Committed transactions for another server are pushed there by the
+forwarder (§5.10), which then marks them `delivered`.
 
 ---
 
@@ -14,6 +14,10 @@ so committed remote transactions stay `committed`).
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ app/main/main.cpp         wiring, signals                            │
+├──────────────────────────────────────────────────────────────────────┤
+│ forwarder/forwarder.cpp   pushes committed remote transactions to    │
+│                           peers (worker thread, retries), §5.10      │
+│ retention/scheduler.cpp   deletes expired transactions (worker)      │
 ├──────────────────────────────────────────────────────────────────────┤
 │ api/server.cpp            HttpServer: sockets, TLS, HTTP parsing,    │
 │                           SessionExchange (implements api::Exchange) │
@@ -38,6 +42,8 @@ so committed remote transactions stay `committed`).
 ├──────────────────────────────────────────────────────────────────────┤
 │ storage/storage.cpp       FileStore, Upload, Download (disk I/O)     │
 ├──────────────────────────────────────────────────────────────────────┤
+│ net/http_client.cpp       HTTP(S) client, used by forwarder and ftc  │
+├──────────────────────────────────────────────────────────────────────┤
 │ common/ logging/ config/  errors, ids, paths, sha256, base64, logs,  │
 │                           TOML                                       │
 └──────────────────────────────────────────────────────────────────────┘
@@ -46,6 +52,137 @@ so committed remote transactions stay `committed`).
 Each layer only calls the layer below it. `api` never touches `storage`
 directly except through the `storage::Download` / `PendingUpload` objects that
 the service hands out.
+
+### Library dependencies
+
+Static libraries under `src/lib/` (CMake targets `confide::<name>-static`) and the
+executables under `src/app/`, as linked in their `CMakeLists.txt`. An arrow
+points from a target to what it links, in that target's color (the color of
+its border); solid = `PUBLIC` (its headers use the dependency, so users of the
+target get it too), dashed = `PRIVATE` (used only inside its `.cpp` files). Only direct links are drawn: `confide-server` gets
+`transaction`, `storage`, `config`, `logging` and `common` through `api` and
+`forwarder`.
+
+```mermaid
+flowchart TB
+    subgraph apps[Executables]
+        server[confide-server<br/>app/main]
+        ftc[ftc<br/>app/cli]
+        passwd[confide-passwd<br/>app/passwd]
+    end
+
+    subgraph libs[Libraries]
+        forwarder
+        retention
+        api
+        auth
+        ldapclient
+        transaction
+        net
+        storage
+        config
+        logging
+        common
+    end
+
+    version([confide::version<br/>generated header])
+
+    server --> api
+    server --> auth
+    server --> retention
+    server --> forwarder
+    server --> version
+    ftc -.-> net
+    ftc -.-> common
+    passwd --> auth
+
+    forwarder --> transaction
+    forwarder --> storage
+    forwarder --> logging
+    forwarder --> net
+    forwarder -.->|encode_receive| api
+
+    retention --> transaction
+    retention --> logging
+
+    api --> transaction
+    api --> config
+    api --> logging
+
+    auth --> config
+    auth --> common
+    auth -.->|WITH_LDAP| ldapclient
+
+    transaction --> storage
+    transaction --> logging
+    transaction --> common
+
+    net --> common
+    storage --> common
+    config --> logging
+    config --> common
+    logging --> common
+
+    %% Arrow and border color = the target the arrow starts from.
+    %% linkStyle counts arrows in the order declared above (from 0):
+    %% adding or removing one shifts the numbers after it.
+    linkStyle 0,1,2,3,4 stroke:#2563eb,stroke-width:2px
+    linkStyle 5,6 stroke:#9333ea,stroke-width:2px
+    linkStyle 7 stroke:#db2777,stroke-width:2px
+    linkStyle 8,9,10,11,12 stroke:#ea580c,stroke-width:2px
+    linkStyle 13,14 stroke:#ca8a04,stroke-width:2px
+    linkStyle 15,16,17 stroke:#16a34a,stroke-width:2px
+    linkStyle 18,19,20 stroke:#dc2626,stroke-width:2px
+    linkStyle 21,22,23 stroke:#0891b2,stroke-width:2px
+    linkStyle 24 stroke:#65a30d,stroke-width:2px
+    linkStyle 25 stroke:#64748b,stroke-width:2px
+    linkStyle 26,27 stroke:#a16207,stroke-width:2px
+    linkStyle 28 stroke:#0f766e,stroke-width:2px
+    style server stroke:#2563eb,stroke-width:3px
+    style ftc stroke:#9333ea,stroke-width:3px
+    style passwd stroke:#db2777,stroke-width:3px
+    style forwarder stroke:#ea580c,stroke-width:3px
+    style retention stroke:#ca8a04,stroke-width:3px
+    style api stroke:#16a34a,stroke-width:3px
+    style auth stroke:#dc2626,stroke-width:3px
+    style transaction stroke:#0891b2,stroke-width:3px
+    style net stroke:#65a30d,stroke-width:3px
+    style storage stroke:#64748b,stroke-width:3px
+    style config stroke:#a16207,stroke-width:3px
+    style logging stroke:#0f766e,stroke-width:3px
+```
+
+Things the graph shows:
+
+- `api` does not depend on `auth`: it only knows the `api::IAuthenticator`
+  interface, and `main` adapts `auth::Authenticator` to it
+  (`HeaderAuthenticator`). Likewise `transaction` knows nothing of `config`,
+  `auth` or `forwarder`; `main` hands it lambdas (`DestinationCheck`,
+  `MembershipCheck`, `CommitHook`).
+- `ftc` shares only `net` and `common` with the server; it never links the
+  server libraries.
+- `forwarder -> api` is the one link that goes sideways: it uses
+  `api::encode_receive()` so that the push body is exactly what the peer's
+  `decode_receive()` parses. It is `PRIVATE`, so nothing above inherits it.
+- `ldapclient` is built and linked only with `-DWITH_LDAP=ON` (the default);
+  without it `auth` compiles `ldap_directory_disabled.cpp` instead.
+- Tests link the library they test: `<lib>_tests` in `tests/unit/<lib>/`;
+  `forwarder_tests` also links `api` to run a real peer server in-process.
+
+External libraries, per target:
+
+| Target | PUBLIC | PRIVATE |
+|---|---|---|
+| `common` | | Boost (headers: Uuid), OpenSSL::Crypto (SHA-256) |
+| `logging` | Threads | |
+| `config` | | toml11 |
+| `auth` | | OpenSSL::Crypto (PBKDF2, token hashes) |
+| `ldapclient` | | OpenLDAP (pkg-config) |
+| `transaction` | | Boost.JSON (meta.json, manifest.json) |
+| `api` | Boost (Asio, Beast), OpenSSL::SSL, Threads | Boost.JSON |
+| `net` | Boost (headers) | Boost.JSON, OpenSSL::SSL, Threads |
+| `forwarder` | | Boost.JSON |
+| `ftc` | | Boost.JSON, Boost.ProgramOptions, OpenSSL::SSL, Threads |
 
 ### Error model
 
@@ -103,7 +240,9 @@ main(argc, argv)
     │       local_server, default_retention_days, max_retention_days,
     │       check_destination = destination_check(cfg, directory),  // FR-13 lambda
     │       is_recipient = directory.is_member(user, target),       // group targets
-    │       on_committed = {} })                                    // forwarder TODO
+    │       on_committed = forward->enqueue(tx.id) if tx.target_server set })
+    ├── forwarder::Forwarder forwarding(service, store, tlog, forwarder_options(cfg))
+    │     one forwarder::Peer per [[peer]]: https if [tls] enabled, tls.ca to verify
     ├── api::TransactionHandlers handlers(service, blog, tlog)
     ├── api::Router router
     ├── handlers.register_routes(router)                  // see §3
@@ -123,9 +262,11 @@ main(argc, argv)
     │                   service.expire(id)                // -> expired, delete folder,
     │                                                     //    blog `expired`
     │                 failures -> tlog.warn, retried next sweep
+    ├── forwarding.start()     // queues service.list_outgoing(), worker thread, see §5.10
     ├── no TLS -> tlog.warn("passwords travel unencrypted")
     ├── signal_io.run()        // blocks main thread until a signal
     ├── server.wait()          // joins the server's worker threads
+    ├── forwarding.stop()      // cancels a push in progress, joins the worker
     └── retention.stop()       // wakes the worker (condition_variable), joins it
 ```
 
@@ -153,6 +294,7 @@ the member function: `[this, fn](RequestContext& ctx) { return (this->*fn)(ctx);
 | GET | `/transactions/{id}/files/{path*}` | user | `download` | `service.open_download` + `service.get` |
 | DELETE | `/transactions/{id}/files/{path*}` | user | `remove_file` | `service.remove_file` |
 | POST | `/internal/transactions` | peer | `receive` | `service.receive` |
+| GET | `/internal/transactions/{id}` | peer | `get` | `service.get` (the pushing peer may read) |
 | PUT | `/internal/transactions/{id}/files/{path*}` | peer | `upload` | (same as user upload) |
 | POST | `/internal/transactions/{id}/commit` | peer | `commit` | (same as user commit) |
 | POST | `/auth/token` | password | `AuthHandlers::login` | `auth.issue_token` |
@@ -179,7 +321,7 @@ the server accepts before the handler runs:
 
 ```
 HttpServer::start()
-├── make_address(bind), acceptor.open/set_option/bind/listen
+├── make_address(bind), else resolve the host name (first address), acceptor.open/set_option/bind/listen
 ├── co_spawn(acceptor strand, Impl::accept_loop())
 └── N threads, each running ioc.run()        // N = rest.threads or hardware_concurrency
 
@@ -576,6 +718,44 @@ AuthHandlers::logout(ctx)                      // Access::user
 
 Logout with Basic credentials is accepted and does nothing.
 
+### 5.10 Forwarding (sending side, FR-10)
+
+[forwarder/forwarder.cpp](src/lib/forwarder/forwarder.cpp). Not a route: a
+worker thread on the sender's server that calls the peer's `/internal` API
+(§5.8) with [net::HttpClient](src/lib/net/http_client.hpp).
+
+```
+service.commit(alice, id)              // target_server = "siteB"
+└── on_committed(tx) -> forwarding.enqueue(id)        // after the lock is released
+
+Forwarder::run()                       // one worker thread, one push at a time
+├── wait until the earliest Pending.due (enqueue() and stop() wake it)
+├── push(id)
+│   ├── service.outgoing(id)           // committed, created here, target_server set
+│   ├── peer = options.peers[tx.target_server]       // else `unknown_destination`
+│   ├── HttpClient::create(peer.url, {tls.ca, io_timeout = 5 min})
+│   │     set_token(peer.token); registered so stop() can cancel() it
+│   ├── POST /internal/transactions    encode_receive(id, sender, target_user, times, comment)
+│   │     409 = an earlier attempt got this far:
+│   │       GET /internal/transactions/{id} -> "open": send the files again
+│   │                                        else: only the confirmation got lost
+│   ├── for each FileEntry: PUT /internal/transactions/{id}/files/{path}
+│   │     body streamed from store.open_read() in 256 KiB chunks,
+│   │     X-Checksum-SHA256 = entry.sha256 (the peer checks it, NFR-6)
+│   ├── POST /internal/transactions/{id}/commit     // peer re-hashes, logs `received`
+│   └── service.mark_delivered(id)     // committed -> delivered, blog `forwarded`
+└── on error:
+      unavailable / throttled / internal / io / integrity
+          -> back into the queue, due in 5 s, 10 s, 20 s ... capped at 10 min
+      anything else (unknown user on the peer, wrong peer token, ...)
+          -> tlog.error, dropped; stays `committed` and is queued again on next start
+```
+
+`forwarding.start()` queues everything `service.list_outgoing()` returns, so
+a push cut short by a restart is redone. Every network operation of the
+client has an idle timeout (`io_timeout`) and `stop()` cancels a push in
+progress, so shutdown never waits for a stalled peer.
+
 ---
 
 ## 6. End-to-end sequence (upload example)
@@ -648,6 +828,7 @@ HttpServer::Impl::stop()
 └── for each tracked connection: post(conn strand): stream.close()
       -> pending reads/writes fail, coroutines finish, Upload destructors delete temp files
 main: signal_io.run() returns -> server.wait() joins all threads
+      -> forwarding.stop() (cancels a push in progress; redone on next start)
       -> retention.stop() (lets a running sweep finish) -> return 0
 ```
 
@@ -664,20 +845,24 @@ main: signal_io.run() returns -> server.wait() joins all threads
   `invalid user name or password`.
 - **Business log** (`business.log`, `logging::BusinessLog::record(BizEvent)`):
   one event per business action: `tx_created`, `file_added`, `file_removed`,
-  `committed`, `received`, `downloaded`, `expired` (retention sweep), plus
-  `forwarded` from the not-yet-wired `mark_delivered()`.
+  `committed`, `received`, `downloaded`, `expired` (retention sweep), and
+  `forwarded` once the peer confirmed a push (`mark_delivered()`).
 - The retention sweep also writes to the technical log (tag `retention`):
   start/stop, a summary line when a sweep removed something, and a warning
   per failed `expire()`.
+- The forwarder (tag `forwarder`): start/stop, how many transactions were
+  left from before, one line per delivered transaction, a warning per failed
+  attempt with the time until the retry, and an error when it gives up.
 
 ---
 
 ## 10. Client (`ftc`)
 
 [app/cli/main.cpp](src/app/cli/main.cpp),
-[http_client.cpp](src/app/cli/http_client.cpp),
-[token_cache.cpp](src/app/cli/token_cache.cpp). A separate executable; it
-shares only `common` with the server.
+[token_cache.cpp](src/app/cli/token_cache.cpp), and the HTTP client
+[net/http_client.cpp](src/lib/net/http_client.cpp), which the server's
+forwarder uses too. A separate executable; it shares only `common` and `net`
+with the server.
 
 ```
 main -> cmd_<command>(global, vm)
@@ -688,7 +873,7 @@ main -> cmd_<command>(global, vm)
     │   ├── http:// without --allow-http -> refuse (before any password is asked)
     │   ├── TokenCache::for_server(url, user)
     │   │     $XDG_STATE_HOME/ftc/tokens/<user>@<host>_<port>  (~/.local/state if unset)
-    │   └── HttpClient::create(url, ca_file)
+    │   └── HttpClient::create(url, {ca_file})            // no io_timeout
     ├── cache.load()
     │     folder 0700 / file 0600; readable or replaceable by others -> refuse
     │     token found -> client.set_token(token)        // "Authorization: Bearer ftu_..."

@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <string>
 #include <string_view>
 
 using confide::common::ErrCode;
@@ -74,7 +75,9 @@ protected:
     return *tx;
   }
 
-  fs::path dir_ = fs::temp_directory_path() / "confide_service_group_test";
+  fs::path dir_ = fs::temp_directory_path()
+      / (std::string{"confide_service_group_test_"}
+         + ::testing::UnitTest::GetInstance()->current_test_info()->name());
   FixedClock clock_;
   confide::logging::BusinessLog blog_{std::make_unique<NullSink>(), clock_};
   std::optional<confide::storage::FileStore> store_;
@@ -129,6 +132,22 @@ TEST_F(GroupTargetTest, WithoutMembershipCheckOnlyExactName) {
   const auto tx = create_open();
   ASSERT_TRUE(service_->commit(carol_, tx.id).has_value());
   EXPECT_EQ(service_->get(alice_, tx.id).error().code, ErrCode::forbidden);
+}
+
+TEST_F(GroupTargetTest, CommentIsStoredAndLimited) {
+  auto tx = service_->create(
+      carol_, CreateRequest{.target_user = "devs", .target_server = {}, .comment = "Q3 reports"});
+  ASSERT_TRUE(tx.has_value()) << tx.error().detail;
+  EXPECT_EQ(tx->comment, "Q3 reports");
+  EXPECT_EQ(service_->get(carol_, tx->id)->comment, "Q3 reports");
+
+  EXPECT_EQ(service_
+                ->create(carol_, CreateRequest{.target_user = "devs",
+                                               .target_server = {},
+                                               .comment = std::string(257, 'x')})
+                .error()
+                .code,
+            ErrCode::validation);
 }
 
 TEST_F(GroupTargetTest, RetentionDefaultsAndLimit) {

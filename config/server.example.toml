@@ -6,7 +6,7 @@ instance_name = "siteA"          # [A-Za-z0-9._-], used in `bob@siteA`
 root = "/var/lib/confide"        # holds tmp/ and transactions/
 
 [rest]
-bind = "0.0.0.0"
+bind = "0.0.0.0"                 # IP or host name (resolved at startup)
 port = 8080
 threads = 0                      # 0 = number of cores
 request_timeout_ms = 30000

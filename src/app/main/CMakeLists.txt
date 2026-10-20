@@ -18,6 +18,7 @@ target_link_libraries(${LOCAL_EXE_NAME} PRIVATE
   ${PROJECT_NAMESPACE}::api-static
   ${PROJECT_NAMESPACE}::auth-static
   ${PROJECT_NAMESPACE}::retention-static
+  ${PROJECT_NAMESPACE}::forwarder-static
   ${PROJECT_NAMESPACE}::version
 )
 

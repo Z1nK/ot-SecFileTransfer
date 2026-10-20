@@ -3,8 +3,7 @@
 //
 //   confide-server path/to/server.toml
 //
-// Only wiring lives here. forwarder is added once it exists; until then
-// committed remote transactions stay `committed`.
+// Only wiring lives here.
 
 #include <api/auth_handlers.hpp>
 #include <api/authenticator.hpp>
@@ -16,9 +15,11 @@
 #include <common/error.hpp>
 #include <common/time.hpp>
 #include <config/config.hpp>
+#include <forwarder/forwarder.hpp>
 #include <logging/business_log.hpp>
 #include <logging/sink.hpp>
 #include <logging/tech_log.hpp>
+#include <net/http_client.hpp>
 #include <retention/scheduler.hpp>
 #include <storage/storage.hpp>
 #include <transaction/repository.hpp>
@@ -90,6 +91,24 @@ transaction::DestinationCheck destination_check(const config::Config& cfg,
   };
 }
 
+// Peers from [[peer]], reached over https when [tls] is on (the same switch
+// as our own API), verified with tls.ca.
+forwarder::ForwarderOptions forwarder_options(const config::Config& cfg) {
+  forwarder::ForwarderOptions options;
+  for (const auto& p : cfg.peers()) {
+    options.peers.push_back(forwarder::Peer{
+        .name = p.name,
+        .url = net::ServerUrl{.tls = cfg.tls().enabled, .host = p.host,
+                              .port = std::to_string(p.port)},
+        .token = p.token,
+    });
+  }
+  if (!cfg.tls().ca_path.empty()) {
+    options.ca_file = cfg.tls().ca_path;
+  }
+  return options;
+}
+
 // api::IAuthenticator on top of auth::Authenticator: hands it the
 // Authorization header and turns the name it returns into a Caller.
 class HeaderAuthenticator final : public api::IAuthenticator {
@@ -144,6 +163,10 @@ Result<void> serve(const config::Config& cfg, const common::IClock& clock, loggi
   transaction::TransactionRepository repo(store);
   CFD_TRYV(repo.load());
 
+  // Set once the forwarder below exists, before the server takes requests,
+  // so no commit can see it unset.
+  forwarder::Forwarder* forward = nullptr;
+
   transaction::TransactionService service(
       repo, store, blog, clock,
       transaction::ServiceOptions{
@@ -154,8 +177,18 @@ Result<void> serve(const config::Config& cfg, const common::IClock& clock, loggi
           .is_recipient = [&dir = *directory](std::string_view user, std::string_view target) {
             return dir.is_member(user, target);
           },
-          .on_committed = {},  // ForwardQueue::enqueue once forwarder exists
+          // Received transactions have no target_server, so only our own
+          // remote ones are pushed.
+          .on_committed =
+              [&forward](const transaction::Transaction& tx) {
+                if (forward != nullptr && !tx.target_server.empty()) {
+                  forward->enqueue(tx.id);
+                }
+              },
       });
+
+  forwarder::Forwarder forwarding(service, store, tlog, forwarder_options(cfg));
+  forward = &forwarding;
 
   api::TransactionHandlers handlers(service, blog, tlog);
   api::Router router;
@@ -188,6 +221,8 @@ Result<void> serve(const config::Config& cfg, const common::IClock& clock, loggi
   retention::RetentionScheduler retention(
       service, tlog, std::chrono::seconds{cfg.retention().sweep_interval_s});
   retention.start();
+  // Picks up what was committed but not delivered before a restart.
+  forwarding.start();
   if (!tls) {
     tlog.warn(kTag, "TLS is off ([tls] enabled = false): passwords travel unencrypted, "
                     "use for local testing only");
@@ -197,6 +232,8 @@ Result<void> serve(const config::Config& cfg, const common::IClock& clock, loggi
 
   signal_io.run();  // returns once the signal handler has run
   server.wait();
+  // A push in progress is aborted and redone on the next start.
+  forwarding.stop();
   retention.stop();
   tlog.info(kTag, "stopped");
   return {};

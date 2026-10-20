@@ -2,14 +2,14 @@ set(LOCAL_EXE_NAME ftc)
 add_executable(${LOCAL_EXE_NAME})
 
 target_sources(${LOCAL_EXE_NAME} PRIVATE
-  http_client.cpp
   token_cache.cpp
   main.cpp
 )
 
-# common: ids, path checks, SHA-256, base64 for Basic credentials.
-# Beast/Asio are header-only (Boost::headers), TLS needs OpenSSL::SSL.
+# net: the HTTP client (brings common along). common: ids, path checks,
+# SHA-256. Boost.JSON for the replies, OpenSSL for OPENSSL_cleanse.
 target_link_libraries(${LOCAL_EXE_NAME} PRIVATE
+  ${PROJECT_NAMESPACE}::net-static
   ${PROJECT_NAMESPACE}::common-static
   Boost::headers
   Boost::json

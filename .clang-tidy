@@ -18,6 +18,7 @@ cert-*,
 -cppcoreguidelines-avoid-non-const-global-variables,
 -cppcoreguidelines-special-member-functions,
 -cppcoreguidelines-avoid-goto,
+-cppcoreguidelines-avoid-do-while,
 -cppcoreguidelines-owning-memory,
 -bugprone-reserved-identifier,
 -cert-err58-cpp,
@@ -31,3 +32,6 @@ CheckOptions:
     value: true
   - key: hicpp-special-member-functions.AllowSoleDefaultDtor
     value: true
+  - key: bugprone-easily-swappable-parameters.MinimumLength
+    value: 3        # only warn for 3+ adjacent same-typed params
+

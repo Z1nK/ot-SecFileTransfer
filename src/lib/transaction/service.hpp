@@ -5,6 +5,7 @@
 #include "transaction/repository.hpp"
 #include "transaction/transaction.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -28,6 +29,7 @@ struct CreateRequest {
   std::string target_user;
   std::string target_server;  // empty or this server's name = local target
   int retention_days = 0;     // 0 = ServiceOptions::default_retention_days
+  std::string comment{};      // optional, see ServiceOptions::max_comment_length
 };
 
 // A transaction pushed by a peer (Architecture §7). Keeps the sender's id
@@ -38,6 +40,7 @@ struct ReceiveRequest {
   std::string target_user;
   common::Timestamp created_at;
   common::Timestamp expires_at;
+  std::string comment{};
 };
 
 enum class Box : std::uint8_t {
@@ -56,14 +59,15 @@ using DestinationCheck =
 using MembershipCheck = std::function<bool(std::string_view user, std::string_view target)>;
 
 // Called after a successful commit, outside the transaction lock. `main`
-// wires it to ForwardQueue::enqueue for remote targets, so this module does
-// not depend on `forwarder`.
+// wires it to forwarder::Forwarder::enqueue for remote targets, so this
+// module does not depend on `forwarder`.
 using CommitHook = std::function<void(const Transaction&)>;
 
 struct ServiceOptions {
   std::string local_server;  // this server's name, from config
   int default_retention_days = 30;
   int max_retention_days = 365;  // upper limit for CreateRequest::retention_days
+  std::size_t max_comment_length = kMaxCommentLength;  // in code points
   DestinationCheck check_destination;
   MembershipCheck is_recipient;  // may be empty: only exact name matches
   CommitHook on_committed;  // may be empty
@@ -130,7 +134,8 @@ public:
 
   // --- Sender -------------------------------------------------------------
 
-  // `validation` on bad retention_days, `unknown_destination` (FR-13).
+  // `validation` on bad retention_days or comment, `unknown_destination`
+  // (FR-13).
   Result<Transaction> create(const Caller& caller, const CreateRequest& req);
 
   Result<PendingUpload> begin_upload(const Caller& caller, const common::TransactionId& id,
@@ -161,6 +166,15 @@ public:
   Result<Transaction> receive(const Caller& peer, const ReceiveRequest& req);
 
   // --- Forwarder and retention --------------------------------------------
+
+  // Committed transactions created here for a user on another server, i.e.
+  // the ones still to be forwarded. Oldest first.
+  std::vector<common::TransactionId> list_outgoing() const;
+
+  // One of list_outgoing(), with its files. `notfound` if it does not exist,
+  // `conflict` if it is not a committed transaction for another server (not
+  // committed yet, already delivered, expired, or local).
+  Result<Transaction> outgoing(const common::TransactionId& id) const;
 
   // committed -> delivered, after the peer confirmed the push.
   Result<void> mark_delivered(const common::TransactionId& id);

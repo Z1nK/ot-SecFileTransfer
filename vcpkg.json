@@ -7,7 +7,7 @@
   ],
   "features": {
     "boost": {
-      "description": "Boost from vcpkg (for distros with Boost < 1.83, e.g. EL8)",
+      "description": "Boost from vcpkg (for distros with Boost < 1.83, e.g. EL8/EL9)",
       "dependencies": [
         "boost-asio",
         "boost-beast",

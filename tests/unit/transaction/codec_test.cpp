@@ -97,6 +97,22 @@ TEST(CodecMeta, RoundTripWithOptionalTimes) {
   EXPECT_EQ(*decoded, tx);
 }
 
+TEST(CodecMeta, RoundTripWithComment) {
+  auto tx = make_tx();
+  tx.comment = "Q3 reports \"final\" \u00e9t\u00e9";
+  const auto decoded = decode_meta(encode_meta(tx));
+  ASSERT_TRUE(decoded) << decoded.error().detail;
+  EXPECT_EQ(*decoded, tx);
+}
+
+TEST(CodecMeta, MissingCommentIsEmpty) {
+  // meta.json written before comments existed has no "comment" field.
+  const auto r = decode_meta(meta_with("", ""));
+  ASSERT_TRUE(r) << r.error().detail;
+  EXPECT_EQ(r->comment, "");
+  expect_invalid_meta(meta_with("state", R"("open","comment":5)"));
+}
+
 TEST(CodecMeta, OmitsUnsetOptionalTimes) {
   const auto json = encode_meta(make_tx());
   EXPECT_EQ(json.find("committed_at"), std::string::npos);

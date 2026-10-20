@@ -199,7 +199,9 @@ TEST(ConfigLoader, FromFileMissingIsIo) {
 }
 
 TEST(ConfigLoader, FromFileResolvesRelativePaths) {
-  const fs::path dir = fs::temp_directory_path() / "confide_config_test";
+  const fs::path dir = fs::temp_directory_path()
+      / (std::string{"confide_config_test_"}
+         + ::testing::UnitTest::GetInstance()->current_test_info()->name());
   fs::create_directories(dir);
   const fs::path file = dir / "server.toml";
   {
@@ -218,7 +220,9 @@ namespace {
 
 // A config file plus a users file in a fresh temp folder; removed on scope exit.
 struct UsersFixture {
-  fs::path dir = fs::temp_directory_path() / "confide_users_test";
+  fs::path dir = fs::temp_directory_path()
+      / (std::string{"confide_users_test_"}
+         + ::testing::UnitTest::GetInstance()->current_test_info()->name());
   fs::path config = dir / "server.toml";
   fs::path users = dir / "users";
 
@@ -468,7 +472,9 @@ TEST(ConfigLoader, LdapSectionIgnoredWithLocal) {
 }
 
 TEST(ConfigLoader, LdapBindPasswordFile) {
-  const fs::path dir = fs::temp_directory_path() / "confide_ldap_test";
+  const fs::path dir = fs::temp_directory_path()
+      / (std::string{"confide_ldap_test_"}
+         + ::testing::UnitTest::GetInstance()->current_test_info()->name());
   fs::remove_all(dir);
   fs::create_directories(dir);
   const fs::path secret = dir / "ldap_bind";

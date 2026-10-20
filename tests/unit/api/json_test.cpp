@@ -66,6 +66,15 @@ TEST(DecodeCreate, OptionalFieldsDefault) {
   ASSERT_TRUE(r);
   EXPECT_EQ(r->target_server, "");
   EXPECT_EQ(r->retention_days, 0);
+  EXPECT_EQ(r->comment, "");
+}
+
+TEST(DecodeCreate, Comment) {
+  auto r = api::decode_create(R"({"target_user":"bob","comment":"Q3 reports"})");
+  ASSERT_TRUE(r);
+  EXPECT_EQ(r->comment, "Q3 reports");
+  EXPECT_EQ(api::decode_create(R"({"target_user":"bob","comment":5})").error().code,
+            ErrCode::validation);
 }
 
 TEST(DecodeCreate, RejectsBadInput) {
@@ -92,6 +101,7 @@ TEST(Receive, RoundTrip) {
       .target_user = "bob",
       .created_at = ts("2026-10-01T10:00:00Z"),
       .expires_at = ts("2026-10-31T10:00:00Z"),
+      .comment = "Q3 reports",
   };
   auto back = api::decode_receive(api::encode_receive(req));
   ASSERT_TRUE(back);
@@ -100,6 +110,7 @@ TEST(Receive, RoundTrip) {
   EXPECT_EQ(back->target_user, req.target_user);
   EXPECT_EQ(back->created_at, req.created_at);
   EXPECT_EQ(back->expires_at, req.expires_at);
+  EXPECT_EQ(back->comment, req.comment);
 }
 
 TEST(Receive, RejectsBadFields) {
@@ -117,13 +128,15 @@ TEST(Receive, RejectsBadFields) {
 }
 
 TEST(EncodeTransaction, Fields) {
-  const auto tx = sample();
+  auto tx = sample();
+  tx.comment = "Q3 reports";
   const auto obj = parse(api::encode_transaction(tx));
   EXPECT_EQ(obj.at("id").as_string(), tx.id.str());
   EXPECT_EQ(obj.at("state").as_string(), "committed");
   EXPECT_EQ(obj.at("sender").as_string(), "alice");
   EXPECT_EQ(obj.at("target_user").as_string(), "bob");
   EXPECT_EQ(obj.at("target_server").as_string(), "siteB");
+  EXPECT_EQ(obj.at("comment").as_string(), "Q3 reports");
   EXPECT_EQ(obj.at("created_at").as_string(), "2026-10-01T10:00:00Z");
   EXPECT_EQ(obj.at("expires_at").as_string(), "2026-10-31T10:00:00Z");
   EXPECT_EQ(obj.at("committed_at").as_string(), "2026-10-01T10:05:00Z");

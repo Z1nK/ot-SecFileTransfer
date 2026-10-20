@@ -73,6 +73,11 @@ bool may_read(const Caller& caller, const Transaction& tx, const MembershipCheck
          || (is_target(caller, tx, is_recipient) && tx.state != State::open);
 }
 
+// Created here, addressed to another server, committed but not yet pushed.
+bool is_outgoing(const Transaction& tx) {
+  return tx.origin_server.empty() && !tx.target_server.empty() && tx.state == State::committed;
+}
+
 void upsert_file(std::vector<FileEntry>& files, FileEntry entry) {
   const auto it = std::ranges::lower_bound(files, entry.path, {}, &FileEntry::path);
   if (it != files.end() && it->path == entry.path) {
@@ -114,6 +119,7 @@ Result<Transaction> TransactionService::create(const Caller& caller, const Creat
     return fail(ErrCode::validation, std::format("retention_days must be at most {}, got {}",
                                                  options_.max_retention_days, req.retention_days));
   }
+  CFD_TRYV(check_comment(req.comment, options_.max_comment_length));
 
   const bool local_target = req.target_server.empty() || req.target_server == options_.local_server;
   const std::string target_server = local_target ? std::string{} : req.target_server;
@@ -132,6 +138,7 @@ Result<Transaction> TransactionService::create(const Caller& caller, const Creat
       .target_user = req.target_user,
       .target_server = target_server,
       .origin_server = {},
+      .comment = req.comment,
       .state = State::open,
       .created_at = created,
       .expires_at = expires,
@@ -319,6 +326,7 @@ Result<Transaction> TransactionService::receive(const Caller& peer, const Receiv
   if (req.expires_at <= req.created_at) {
     return fail(ErrCode::validation, "expires_at must be after created_at");
   }
+  CFD_TRYV(check_comment(req.comment, options_.max_comment_length));
   if (options_.check_destination) {
     CFD_TRYV(options_.check_destination(req.target_user, std::string_view{}));
   }
@@ -332,6 +340,7 @@ Result<Transaction> TransactionService::receive(const Caller& peer, const Receiv
       .target_user = req.target_user,
       .target_server = {},
       .origin_server = peer.name,
+      .comment = req.comment,
       .state = State::open,
       .created_at = req.created_at,
       .expires_at = req.expires_at,
@@ -341,6 +350,32 @@ Result<Transaction> TransactionService::receive(const Caller& peer, const Receiv
 }
 
 // --- Forwarder and retention ------------------------------------------------
+
+std::vector<common::TransactionId> TransactionService::list_outgoing() const {
+  auto txs = repo_.find_if([](const Transaction& tx) { return is_outgoing(tx); });
+  std::ranges::sort(txs, [](const Transaction& a, const Transaction& b) {
+    return a.committed_at != b.committed_at ? a.committed_at < b.committed_at : a.id < b.id;
+  });
+  std::vector<common::TransactionId> ids;
+  ids.reserve(txs.size());
+  for (const auto& tx : txs) {
+    ids.push_back(tx.id);
+  }
+  return ids;
+}
+
+Result<Transaction> TransactionService::outgoing(const common::TransactionId& id) const {
+  auto tx = repo_.find(id);
+  if (!tx) {
+    return not_found(id);
+  }
+  if (!is_outgoing(*tx)) {
+    return fail(ErrCode::conflict,
+                std::format("transaction {} is {}, not waiting to be forwarded", id.str(),
+                            to_string(tx->state)));
+  }
+  return std::move(*tx);
+}
 
 Result<void> TransactionService::mark_delivered(const common::TransactionId& id) {
   const auto mu = lock_for(id);
