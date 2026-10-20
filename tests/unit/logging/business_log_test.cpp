@@ -136,7 +136,9 @@ TEST(BusinessLog, NeverDropsUnderConcurrency) {
 }
 
 TEST(BusinessLog, WritesToFile) {
-  const fs::path dir = fs::temp_directory_path() / "confide_business_log_test";
+  const fs::path dir = fs::temp_directory_path()
+      / (std::string{"confide_business_log_test_"}
+         + ::testing::UnitTest::GetInstance()->current_test_info()->name());
   fs::remove_all(dir);
   fs::create_directories(dir);
   const fs::path file = dir / "business.log";

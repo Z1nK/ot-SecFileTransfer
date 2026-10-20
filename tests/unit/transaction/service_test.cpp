@@ -74,7 +74,9 @@ protected:
     return *tx;
   }
 
-  fs::path dir_ = fs::temp_directory_path() / "confide_service_group_test";
+  fs::path dir_ = fs::temp_directory_path()
+      / (std::string{"confide_service_group_test_"}
+         + ::testing::UnitTest::GetInstance()->current_test_info()->name());
   FixedClock clock_;
   confide::logging::BusinessLog blog_{std::make_unique<NullSink>(), clock_};
   std::optional<confide::storage::FileStore> store_;

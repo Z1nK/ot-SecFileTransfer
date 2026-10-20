@@ -31,6 +31,9 @@ Changes since `v0.6.0`. `CMakeLists.txt` sets `APP_VERSION` to `0.6.1`; that ver
 - Configuration parsing split by section: authentication, storage, REST, TLS, logging, retention and peers.
 - `.clang-tidy`: configured the `bugprone-easily-swappable-parameters` check.
 
+#### Fixed
+- Unit tests that shared a fixed temp folder (config, business log, retention, transaction service) failed at random under `ctest -j`; each test now uses its own folder.
+
 ## [0.6.0] — 2026-10-14
 
 ### Business logic

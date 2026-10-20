@@ -99,7 +99,9 @@ protected:
 
   bool on_disk(const TransactionId& id) const { return fs::exists(dir_ / "transactions" / id.str()); }
 
-  fs::path dir_ = fs::temp_directory_path() / "confide_retention_test";
+  fs::path dir_ = fs::temp_directory_path()
+      / (std::string{"confide_retention_test_"}
+         + ::testing::UnitTest::GetInstance()->current_test_info()->name());
   SettableClock clock_;
   LinesSink* biz_ = new LinesSink;  // owned by blog_
   confide::logging::BusinessLog blog_{std::unique_ptr<LinesSink>(biz_), clock_};
