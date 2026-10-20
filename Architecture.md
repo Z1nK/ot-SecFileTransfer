@@ -235,6 +235,7 @@ sequenceDiagram
 | POST | `/auth/token` | Log in with Basic auth; returns a user token (Bearer) |
 | DELETE | `/auth/token` | Log out: revoke the presented user token |
 | POST/PUT | `/internal/transactions/...` | Server-to-server push (peer token only) |
+| GET | `/internal/transactions/{id}` | State of a pushed transaction, so a retried push can resume (peer token only) |
 
 ## 9. On-Disk Layout
 

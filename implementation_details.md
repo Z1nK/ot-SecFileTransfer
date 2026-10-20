@@ -153,6 +153,7 @@ the member function: `[this, fn](RequestContext& ctx) { return (this->*fn)(ctx);
 | GET | `/transactions/{id}/files/{path*}` | user | `download` | `service.open_download` + `service.get` |
 | DELETE | `/transactions/{id}/files/{path*}` | user | `remove_file` | `service.remove_file` |
 | POST | `/internal/transactions` | peer | `receive` | `service.receive` |
+| GET | `/internal/transactions/{id}` | peer | `get` | `service.get` (the pushing peer may read) |
 | PUT | `/internal/transactions/{id}/files/{path*}` | peer | `upload` | (same as user upload) |
 | POST | `/internal/transactions/{id}/commit` | peer | `commit` | (same as user commit) |
 | POST | `/auth/token` | password | `AuthHandlers::login` | `auth.issue_token` |

@@ -60,9 +60,11 @@ public:
   // POST /internal/transactions            -> 201 + transaction
   asio::awaitable<void> receive(RequestContext& ctx);
 
+  // GET  /internal/transactions/{id},
   // PUT  /internal/transactions/{id}/files/{path*} and
-  // POST /internal/transactions/{id}/commit use upload() and commit(): the
-  // Caller carries is_peer, and the service applies the peer rules.
+  // POST /internal/transactions/{id}/commit use get(), upload() and commit():
+  // the Caller carries is_peer, and the service applies the peer rules. The
+  // GET lets a forwarder that retries see how far an earlier push got.
 
 private:
   // Parses the {id} / {path*} parameters; `validation` (400) if malformed.

@@ -90,6 +90,12 @@ Result<void> TransactionHandlers::register_routes(Router& router) {
           .fn = &TransactionHandlers::receive,
       },
       Def{
+          .method = verb::get,
+          .pattern = "/internal/transactions/{id}",
+          .access = Access::peer,
+          .fn = &TransactionHandlers::get,
+      },
+      Def{
           .method = verb::put,
           .pattern = "/internal/transactions/{id}/files/{path*}",
           .access = Access::peer,
