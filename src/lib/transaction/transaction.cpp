@@ -1,6 +1,7 @@
 #include "transaction/transaction.hpp"
 
 #include <algorithm>
+#include <format>
 #include <numeric>
 #include <string>
 
@@ -18,6 +19,27 @@ std::string_view to_string(State state) {
     return "expired";
   }
   return "unknown";
+}
+
+Result<void> check_comment(std::string_view comment, std::size_t max_length) {
+  std::size_t length = 0;
+  for (const char ch : comment) {
+    const auto c = static_cast<unsigned char>(ch);
+    if (c < 0x20 || c == 0x7f) {
+      return std::unexpected(common::Error::make(common::ErrCode::validation,
+                                                 "comment must not contain control characters"));
+    }
+    // Count every byte that is not a UTF-8 continuation byte (10xxxxxx).
+    if ((c & 0xC0U) != 0x80U) {
+      ++length;
+    }
+  }
+  if (length > max_length) {
+    return std::unexpected(common::Error::make(
+        common::ErrCode::validation,
+        std::format("comment must be at most {} characters, got {}", max_length, length)));
+  }
+  return {};
 }
 
 Result<State> parse_state(std::string_view text) {

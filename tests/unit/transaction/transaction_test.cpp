@@ -2,12 +2,14 @@
 
 #include <gtest/gtest.h>
 
+#include <string>
 #include <string_view>
 
 using confide::common::ErrCode;
 using confide::common::RelativePath;
 using confide::common::Sha256Digest;
 using confide::common::TransactionId;
+using confide::transaction::check_comment;
 using confide::transaction::FileEntry;
 using confide::transaction::parse_state;
 using confide::transaction::State;
@@ -68,4 +70,24 @@ TEST(TransactionModel, TotalBytes) {
 
   tx.files = {entry("a", 10), entry("b", 20), entry("c", 12)};
   EXPECT_EQ(tx.total_bytes(), 42U);
+}
+
+TEST(Comment, CountsCharactersNotBytes) {
+  EXPECT_TRUE(check_comment("", 0));
+  EXPECT_TRUE(check_comment(std::string(256, 'x'), 256));
+  EXPECT_EQ(check_comment(std::string(257, 'x'), 256).error().code, ErrCode::validation);
+
+  // "é" is two bytes in UTF-8 but one character.
+  std::string accents;
+  for (int i = 0; i < 256; ++i) {
+    accents += "\u00e9";
+  }
+  EXPECT_TRUE(check_comment(accents, 256));
+  EXPECT_FALSE(check_comment(accents + "x", 256));
+}
+
+TEST(Comment, RejectsControlCharacters) {
+  EXPECT_EQ(check_comment("two\nlines", 256).error().code, ErrCode::validation);
+  EXPECT_EQ(check_comment("tab\there", 256).error().code, ErrCode::validation);
+  EXPECT_EQ(check_comment("del\x7f", 256).error().code, ErrCode::validation);
 }
