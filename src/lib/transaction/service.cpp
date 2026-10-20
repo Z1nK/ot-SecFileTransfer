@@ -114,6 +114,7 @@ Result<Transaction> TransactionService::create(const Caller& caller, const Creat
     return fail(ErrCode::validation, std::format("retention_days must be at most {}, got {}",
                                                  options_.max_retention_days, req.retention_days));
   }
+  CFD_TRYV(check_comment(req.comment, options_.max_comment_length));
 
   const bool local_target = req.target_server.empty() || req.target_server == options_.local_server;
   const std::string target_server = local_target ? std::string{} : req.target_server;
@@ -132,6 +133,7 @@ Result<Transaction> TransactionService::create(const Caller& caller, const Creat
       .target_user = req.target_user,
       .target_server = target_server,
       .origin_server = {},
+      .comment = req.comment,
       .state = State::open,
       .created_at = created,
       .expires_at = expires,
@@ -319,6 +321,7 @@ Result<Transaction> TransactionService::receive(const Caller& peer, const Receiv
   if (req.expires_at <= req.created_at) {
     return fail(ErrCode::validation, "expires_at must be after created_at");
   }
+  CFD_TRYV(check_comment(req.comment, options_.max_comment_length));
   if (options_.check_destination) {
     CFD_TRYV(options_.check_destination(req.target_user, std::string_view{}));
   }
@@ -332,6 +335,7 @@ Result<Transaction> TransactionService::receive(const Caller& peer, const Receiv
       .target_user = req.target_user,
       .target_server = {},
       .origin_server = peer.name,
+      .comment = req.comment,
       .state = State::open,
       .created_at = req.created_at,
       .expires_at = req.expires_at,

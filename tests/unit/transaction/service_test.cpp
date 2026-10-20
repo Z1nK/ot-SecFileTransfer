@@ -131,6 +131,22 @@ TEST_F(GroupTargetTest, WithoutMembershipCheckOnlyExactName) {
   EXPECT_EQ(service_->get(alice_, tx.id).error().code, ErrCode::forbidden);
 }
 
+TEST_F(GroupTargetTest, CommentIsStoredAndLimited) {
+  auto tx = service_->create(
+      carol_, CreateRequest{.target_user = "devs", .target_server = {}, .comment = "Q3 reports"});
+  ASSERT_TRUE(tx.has_value()) << tx.error().detail;
+  EXPECT_EQ(tx->comment, "Q3 reports");
+  EXPECT_EQ(service_->get(carol_, tx->id)->comment, "Q3 reports");
+
+  EXPECT_EQ(service_
+                ->create(carol_, CreateRequest{.target_user = "devs",
+                                               .target_server = {},
+                                               .comment = std::string(257, 'x')})
+                .error()
+                .code,
+            ErrCode::validation);
+}
+
 TEST_F(GroupTargetTest, RetentionDefaultsAndLimit) {
   using std::chrono::days;
   const auto now = clock_.now();

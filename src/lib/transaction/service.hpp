@@ -5,6 +5,7 @@
 #include "transaction/repository.hpp"
 #include "transaction/transaction.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -28,6 +29,7 @@ struct CreateRequest {
   std::string target_user;
   std::string target_server;  // empty or this server's name = local target
   int retention_days = 0;     // 0 = ServiceOptions::default_retention_days
+  std::string comment{};      // optional, see ServiceOptions::max_comment_length
 };
 
 // A transaction pushed by a peer (Architecture §7). Keeps the sender's id
@@ -38,6 +40,7 @@ struct ReceiveRequest {
   std::string target_user;
   common::Timestamp created_at;
   common::Timestamp expires_at;
+  std::string comment{};
 };
 
 enum class Box : std::uint8_t {
@@ -64,6 +67,7 @@ struct ServiceOptions {
   std::string local_server;  // this server's name, from config
   int default_retention_days = 30;
   int max_retention_days = 365;  // upper limit for CreateRequest::retention_days
+  std::size_t max_comment_length = kMaxCommentLength;  // in code points
   DestinationCheck check_destination;
   MembershipCheck is_recipient;  // may be empty: only exact name matches
   CommitHook on_committed;  // may be empty
@@ -130,7 +134,8 @@ public:
 
   // --- Sender -------------------------------------------------------------
 
-  // `validation` on bad retention_days, `unknown_destination` (FR-13).
+  // `validation` on bad retention_days or comment, `unknown_destination`
+  // (FR-13).
   Result<Transaction> create(const Caller& caller, const CreateRequest& req);
 
   Result<PendingUpload> begin_upload(const Caller& caller, const common::TransactionId& id,
