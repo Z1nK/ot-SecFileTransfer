@@ -67,7 +67,7 @@ constexpr std::string_view kCommands = R"(Commands:
   login                 ask for the password and save a token for later
                         commands (any command logs in first if needed)
   logout                end the session on the server and delete the token
-  send --to USER[@SERVER] [--retention DAYS] PATH...
+  send --to USER[@SERVER] [--retention DAYS] [--comment TEXT] PATH...
                         create a transaction, upload the files and folders,
                         commit
   inbox                 list transactions sent to you
@@ -380,6 +380,9 @@ Result<void> cmd_send(const Global& global, const po::variables_map& vm) {
   if (vm.contains("retention")) {
     body["retention_days"] = vm["retention"].as<int>();
   }
+  if (vm.contains("comment")) {
+    body["comment"] = vm["comment"].as<std::string>();
+  }
 
   CFD_TRY(files, collect_files(vm["path"].as<std::vector<std::string>>()));
   CFD_TRY(client, connect(global));
@@ -414,8 +417,8 @@ Result<void> cmd_list(const Global& global, std::string_view box) {
   CFD_TRY(list, parse_list(reply, "transactions"));
 
   const bool in = box == "in";
-  std::cout << std::format("{:<36}  {:<9}  {:<24}  {:>5}  {:>12}  {}\n", "ID", "STATE",
-                           in ? "FROM" : "TO", "FILES", "BYTES", "CREATED");
+  std::cout << std::format("{:<36}  {:<9}  {:<24}  {:>5}  {:>12}  {:<20}  {}\n", "ID", "STATE",
+                           in ? "FROM" : "TO", "FILES", "BYTES", "CREATED", "COMMENT");
   for (const auto& v : list) {
     if (!v.is_object()) {
       continue;
@@ -423,9 +426,9 @@ Result<void> cmd_list(const Global& global, std::string_view box) {
     const auto& tx = v.get_object();
     const auto peer =
         in ? std::string{str(tx, "sender")} : address(tx, "target_user", "target_server");
-    std::cout << std::format("{:<36}  {:<9}  {:<24}  {:>5}  {:>12}  {}\n", str(tx, "id"),
+    std::cout << std::format("{:<36}  {:<9}  {:<24}  {:>5}  {:>12}  {:<20}  {}\n", str(tx, "id"),
                              str(tx, "state"), peer, num(tx, "file_count"), num(tx, "total_bytes"),
-                             str(tx, "created_at"));
+                             str(tx, "created_at"), str(tx, "comment"));
   }
   return {};
 }
@@ -549,7 +552,7 @@ int run_command(const std::string& command, const std::vector<std::string>& args
                 const Global& global) {
   const auto synopsis = [&]() -> std::string_view {
     if (command == "send") {
-      return " --to USER[@SERVER] [--retention DAYS] PATH...";
+      return " --to USER[@SERVER] [--retention DAYS] [--comment TEXT] PATH...";
     }
     if (command == "show" || command == "files") {
       return " ID";
@@ -570,7 +573,9 @@ int run_command(const std::string& command, const std::vector<std::string>& args
                        po::value<std::string>()->required()->value_name("USER|GROUP[@SERVER]"),
                        "receiver, a user or a group; without @SERVER one on the same server")(
         "retention,r", po::value<int>()->value_name("DAYS"),
-        "days to keep the transaction (server default if not set)");
+        "days to keep the transaction (server default if not set)")(
+        "comment,m", po::value<std::string>()->value_name("TEXT"),
+        "short note shown in inbox/outbox (at most 256 characters)");
     hidden.add_options()("path", po::value<std::vector<std::string>>()->required());
     pos.add("path", -1);
     run = cmd_send;

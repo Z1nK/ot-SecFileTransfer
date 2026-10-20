@@ -367,6 +367,7 @@ build/bin/ftc --allow-http -u bob get $ID downloads
 Notes:
 
 - `--to bob@siteB` sends to a user on another server, `--retention DAYS` sets `retention_days`.
+- `--comment "Q3 reports"` (`-m`) attaches a short note, shown in the COMMENT column of `inbox`/`outbox`.
 - `ftc outbox` lists the transactions you sent.
 - `get` does not overwrite existing files unless you add `--force`.
 - If an upload fails, `send` prints the id of the transaction it left `open`.
