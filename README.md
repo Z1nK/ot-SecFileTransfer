@@ -16,13 +16,14 @@ See [Requirements.md](Requirements.md) and [Architecture.md](Architecture.md) fo
 
 | Works now | Not done yet |
 |-----------|--------------|
-| create / upload / delete / commit / list / download over REST | forwarding to a peer server (transactions to `user@otherServer` stay `committed`) |
+| create / upload / delete / commit / list / download over REST | resume of an interrupted upload (FR-15, "could") |
+| forwarding to a peer (`bob@siteB`): pushed after commit, retried with backoff while the peer is down, `delivered` once it confirmed | |
 | TLS on/off | |
 | retention: expired transactions are deleted every `sweep_interval_s` | |
 | Basic auth and user tokens (`ftc login`), login throttling, access rules, path checks | |
 | business and technical logs, log rotation | |
-| `/internal/...` peer endpoints (receiving side) | |
 | `ftc` client: `login`, `logout`, `send`, `inbox`, `outbox`, `show`, `files`, `get` | |
+| unit tests, a two-server end-to-end test, a benchmark with a memory check | |
 
 ## 1. Build
 
@@ -196,6 +197,18 @@ Everything else has a default. Unknown keys give a warning in the technical log.
 | `[[peer]]` `name`, `host`, `port` | port `8080` | another server that transactions can be sent to |
 | `[[peer]]` `token` | — | secret this server sends to the peer |
 | `[[peer]]` `accept_token` | — | secret the peer must send to us (`Authorization: Bearer ...`). Use a different secret than `token` |
+
+Peers are called over https when `[tls] enabled = true` (the same switch as our own
+API) and verified with `tls.ca`, so both servers must use TLS or both not. The peer's
+certificate must name `host`. Each pair of servers shares two tokens, one per direction:
+siteA's `token` is siteB's `accept_token` for siteA, and the other way round.
+
+After a commit to `bob@siteB`, siteA pushes the transaction to siteB in the
+background and marks it `delivered`; `ftc show ID` on siteA tells you which. If
+siteB can't be reached, siteA retries after 5 s, 10 s, 20 s ... up to every 10
+minutes, and again after a restart. Errors that a retry can't fix (no user `bob` on
+siteB, wrong token) are logged in siteA's `technical.log`; the transaction then
+stays `committed` until the next start.
 
 ### Minimal local config
 
@@ -449,7 +462,11 @@ With the server running and the flow above done, these should hold:
 ```
 src/app/main/      confide-server entry point
 src/app/passwd/    confide-passwd
-src/lib/           common, config, logging, storage, auth, transaction, api
+src/app/cli/       ftc
+src/lib/           common, config, logging, storage, auth, transaction, retention,
+                   net (HTTP client, shared by ftc and forwarder), api, forwarder
 tests/unit/        GoogleTest unit tests, one folder per module
+tests/integration/ end-to-end test with two servers
+tests/bench/       benchmark and memory check
 config/            example server config
 ```

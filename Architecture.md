@@ -136,7 +136,7 @@ Rule: dependencies point downward only. `transaction` and `storage` know nothing
 | `transaction` | `Transaction`, `FileEntry`, `State` enum, `TransactionService`, `TransactionRepository` (files on disk) | Business rules: only `open` transactions accept changes; commit verifies checksums, writes the manifest, and locks the transaction. Access rules (sender vs target). | FR-1..4, FR-12, FR-13 |
 | `api` | `HttpServer` (Asio/Beast, thread pool), `Router`, handlers, JSON (de)serialisation, TLS context | Translates HTTP to service calls and errors to status codes. Streams request and response bodies. | FR-1..4, FR-11, NFR-3 |
 | `net` | `HttpClient` (Beast, optional TLS), streamed file upload and download helpers | Client-side HTTP used by both `forwarder` and `ftc`. Reads and writes files in chunks. | FR-7, FR-11, FR-14 |
-| `forwarder` | `PeerRegistry` (name to host:port), `PeerClient` (uses `net`), `ForwardQueue` and worker | After commit, pushes the transaction to the peer named in `target_server`, retries on failure, marks it `delivered`. | FR-10, FR-13 |
+| `forwarder` | `Forwarder`: peer list (name to URL and token), queue and worker thread, pushes with `net::HttpClient` | After commit, pushes the transaction to the peer named in `target_server`, retries with backoff on failure, marks it `delivered`. | FR-10, FR-13 |
 | `retention` | `RetentionScheduler` (timer thread) | Periodically finds expired transactions and deletes them with their files. | FR-9 |
 | `client` | `ftc` executable: `send`, `inbox`, `get` commands, folder walker (`std::filesystem`), progress output | User-facing tool. `send` walks a folder, uploads each file with its relative path and commits; `get` downloads a transaction and recreates the folders. | FR-14 |
 | `main` | `main.cpp` (server) | Parses the CLI, loads config, wires all modules, handles SIGINT/SIGTERM for clean shutdown. | NFR-8 |
@@ -279,7 +279,8 @@ project/
 │       ├── storage/     (file_store, sha256)
 │       ├── transaction/ (transaction.hpp, transaction_service, repository)
 │       ├── api/         (http_server, router, handlers, json)
-│       ├── forwarder/   (peer_registry, peer_client, forward_queue)
+│       ├── net/         (http_client, shared by ftc and forwarder)
+│       ├── forwarder/   (forwarder: peers, queue, worker)
 │       └── retention/   (retention_scheduler)
 └── tests/           (unit/, integration/)
 ```

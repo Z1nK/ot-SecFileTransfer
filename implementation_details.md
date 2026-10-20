@@ -4,8 +4,8 @@ This document describes how the code works **today**: which function calls
 which, from process start to a byte landing on disk and the response going
 back. For the target design see [Architecture.md](Architecture.md).
 
-Not implemented yet: the forwarder (`ServiceOptions::on_committed` is empty,
-so committed remote transactions stay `committed`).
+Committed transactions for another server are pushed there by the
+forwarder (§5.10), which then marks them `delivered`.
 
 ---
 
@@ -42,6 +42,8 @@ so committed remote transactions stay `committed`).
 ├──────────────────────────────────────────────────────────────────────┤
 │ storage/storage.cpp       FileStore, Upload, Download (disk I/O)     │
 ├──────────────────────────────────────────────────────────────────────┤
+│ net/http_client.cpp       HTTP(S) client, used by forwarder and ftc  │
+├──────────────────────────────────────────────────────────────────────┤
 │ common/ logging/ config/  errors, ids, paths, sha256, base64, logs,  │
 │                           TOML                                       │
 └──────────────────────────────────────────────────────────────────────┘
@@ -50,6 +52,137 @@ so committed remote transactions stay `committed`).
 Each layer only calls the layer below it. `api` never touches `storage`
 directly except through the `storage::Download` / `PendingUpload` objects that
 the service hands out.
+
+### Library dependencies
+
+Static libraries under `src/lib/` (CMake targets `confide::<name>-static`) and the
+executables under `src/app/`, as linked in their `CMakeLists.txt`. An arrow
+points from a target to what it links, in that target's color (the color of
+its border); solid = `PUBLIC` (its headers use the dependency, so users of the
+target get it too), dashed = `PRIVATE` (used only inside its `.cpp` files). Only direct links are drawn: `confide-server` gets
+`transaction`, `storage`, `config`, `logging` and `common` through `api` and
+`forwarder`.
+
+```mermaid
+flowchart TB
+    subgraph apps[Executables]
+        server[confide-server<br/>app/main]
+        ftc[ftc<br/>app/cli]
+        passwd[confide-passwd<br/>app/passwd]
+    end
+
+    subgraph libs[Libraries]
+        forwarder
+        retention
+        api
+        auth
+        ldapclient
+        transaction
+        net
+        storage
+        config
+        logging
+        common
+    end
+
+    version([confide::version<br/>generated header])
+
+    server --> api
+    server --> auth
+    server --> retention
+    server --> forwarder
+    server --> version
+    ftc -.-> net
+    ftc -.-> common
+    passwd --> auth
+
+    forwarder --> transaction
+    forwarder --> storage
+    forwarder --> logging
+    forwarder --> net
+    forwarder -.->|encode_receive| api
+
+    retention --> transaction
+    retention --> logging
+
+    api --> transaction
+    api --> config
+    api --> logging
+
+    auth --> config
+    auth --> common
+    auth -.->|WITH_LDAP| ldapclient
+
+    transaction --> storage
+    transaction --> logging
+    transaction --> common
+
+    net --> common
+    storage --> common
+    config --> logging
+    config --> common
+    logging --> common
+
+    %% Arrow and border color = the target the arrow starts from.
+    %% linkStyle counts arrows in the order declared above (from 0):
+    %% adding or removing one shifts the numbers after it.
+    linkStyle 0,1,2,3,4 stroke:#2563eb,stroke-width:2px
+    linkStyle 5,6 stroke:#9333ea,stroke-width:2px
+    linkStyle 7 stroke:#db2777,stroke-width:2px
+    linkStyle 8,9,10,11,12 stroke:#ea580c,stroke-width:2px
+    linkStyle 13,14 stroke:#ca8a04,stroke-width:2px
+    linkStyle 15,16,17 stroke:#16a34a,stroke-width:2px
+    linkStyle 18,19,20 stroke:#dc2626,stroke-width:2px
+    linkStyle 21,22,23 stroke:#0891b2,stroke-width:2px
+    linkStyle 24 stroke:#65a30d,stroke-width:2px
+    linkStyle 25 stroke:#64748b,stroke-width:2px
+    linkStyle 26,27 stroke:#a16207,stroke-width:2px
+    linkStyle 28 stroke:#0f766e,stroke-width:2px
+    style server stroke:#2563eb,stroke-width:3px
+    style ftc stroke:#9333ea,stroke-width:3px
+    style passwd stroke:#db2777,stroke-width:3px
+    style forwarder stroke:#ea580c,stroke-width:3px
+    style retention stroke:#ca8a04,stroke-width:3px
+    style api stroke:#16a34a,stroke-width:3px
+    style auth stroke:#dc2626,stroke-width:3px
+    style transaction stroke:#0891b2,stroke-width:3px
+    style net stroke:#65a30d,stroke-width:3px
+    style storage stroke:#64748b,stroke-width:3px
+    style config stroke:#a16207,stroke-width:3px
+    style logging stroke:#0f766e,stroke-width:3px
+```
+
+Things the graph shows:
+
+- `api` does not depend on `auth`: it only knows the `api::IAuthenticator`
+  interface, and `main` adapts `auth::Authenticator` to it
+  (`HeaderAuthenticator`). Likewise `transaction` knows nothing of `config`,
+  `auth` or `forwarder`; `main` hands it lambdas (`DestinationCheck`,
+  `MembershipCheck`, `CommitHook`).
+- `ftc` shares only `net` and `common` with the server; it never links the
+  server libraries.
+- `forwarder -> api` is the one link that goes sideways: it uses
+  `api::encode_receive()` so that the push body is exactly what the peer's
+  `decode_receive()` parses. It is `PRIVATE`, so nothing above inherits it.
+- `ldapclient` is built and linked only with `-DWITH_LDAP=ON` (the default);
+  without it `auth` compiles `ldap_directory_disabled.cpp` instead.
+- Tests link the library they test: `<lib>_tests` in `tests/unit/<lib>/`;
+  `forwarder_tests` also links `api` to run a real peer server in-process.
+
+External libraries, per target:
+
+| Target | PUBLIC | PRIVATE |
+|---|---|---|
+| `common` | | Boost (headers: Uuid), OpenSSL::Crypto (SHA-256) |
+| `logging` | Threads | |
+| `config` | | toml11 |
+| `auth` | | OpenSSL::Crypto (PBKDF2, token hashes) |
+| `ldapclient` | | OpenLDAP (pkg-config) |
+| `transaction` | | Boost.JSON (meta.json, manifest.json) |
+| `api` | Boost (Asio, Beast), OpenSSL::SSL, Threads | Boost.JSON |
+| `net` | Boost (headers) | Boost.JSON, OpenSSL::SSL, Threads |
+| `forwarder` | | Boost.JSON |
+| `ftc` | | Boost.JSON, Boost.ProgramOptions, OpenSSL::SSL, Threads |
 
 ### Error model
 

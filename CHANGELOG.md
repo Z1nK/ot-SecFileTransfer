@@ -11,16 +11,30 @@ Each release is split into two parts:
 
 ## [Unreleased] — HEAD
 
-Changes since `v0.6.0`. `CMakeLists.txt` sets `APP_VERSION` to `0.6.1`; that version is not tagged yet.
+Changes since `v0.6.0`, not tagged yet.
 
 ### Business logic
 
 #### Added
+- **Forwarding to a peer server (FR-10)**: a transaction committed for `user@otherServer` is pushed to that server in the background, then marked `delivered`. A failed push stays `committed` and is retried with backoff (5 s doubling up to 10 min) while the error may go away (peer down, overloaded, failing). It is also picked up again after a restart. Errors a retry can't fix (unknown user on the peer, wrong peer token) are logged and wait for the next start.
+- A retried push continues where the earlier one stopped: files are sent again only if the transaction is still open on the peer, and only the confirmation is redone if the peer already committed it.
+- Peer endpoint `GET /internal/transactions/{id}`, so a peer can see the state of a transaction it pushed.
+- Optional `comment` on a transaction (`ftc send --comment`), at most 256 characters, carried along when forwarded.
 - `rest.bind` accepts a host name as well as an IP address (`0.0.0.0`, `::`, `10.1.2.3`). The name is resolved once at startup.
+
+#### Fixed
+- `ftc get` failed on files larger than 8 MiB (`body limit exceeded`).
+- The server refuses to start if the system binds a different port or address than configured (seen on WSL2 for ports Windows keeps for itself), instead of silently listening where no client or peer will look.
 
 ### Technical
 
 #### Added
+- `net` library: the HTTP client moved out of `ftc` so the forwarder can use it too. New: an idle timeout per connect, read and write, `cancel()` from another thread, uploads streamed from any source (not just a file), and up to two retries when connecting or the TLS handshake fails before anything was sent.
+- `forwarder` library with a worker thread, wired into `confide-server` (started after the API, stopped before retention).
+- `TransactionService::list_outgoing()` and `outgoing()` for the forwarder.
+- Unit tests for the client (timeouts, cancel, failing upload source) and the forwarder (against a real in-process server: delivery, resume, lost confirmation, permanent and transient errors, restart, shutdown during a stalled push).
+- End-to-end test `tests/integration/two_sites.sh` (in `ctest`, label `integration`): two servers with TLS driven by `ftc` and `curl`.
+- Benchmark `tests/bench/bench.sh`: 1000 small files and a 2 GiB file, with throughput and a peak memory check against the NFR-4 limit of 100 MiB.
 - systemd support in the DEB and RPM packages: a `confide-server.service` unit plus install and remove scripts (`postinst`/`prerm`/`postrm`, `pre`/`post`/`preun`/`postun`).
 - RPM packages for EL9 alongside EL8 in the release workflow. On both EL8 and EL9, Boost comes from vcpkg.
 
