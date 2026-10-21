@@ -858,14 +858,20 @@ main: signal_io.run() returns -> server.wait() joins all threads
 
 ## 10. Client (`ftc`)
 
-[app/cli/main.cpp](src/app/cli/main.cpp),
-[token_cache.cpp](src/app/cli/token_cache.cpp), and the HTTP client
-[net/http_client.cpp](src/lib/net/http_client.cpp), which the server's
-forwarder uses too. A separate executable; it shares only `common` and `net`
-with the server.
+[app/cli/](src/app/cli/): [main.cpp](src/app/cli/main.cpp) (global options),
+[dispatch.cpp](src/app/cli/dispatch.cpp) (command lookup and argument
+parsing), [session.cpp](src/app/cli/session.cpp) (connect, login),
+[password.cpp](src/app/cli/password.cpp),
+[token_cache.cpp](src/app/cli/token_cache.cpp),
+[reply.cpp](src/app/cli/reply.cpp) (JSON replies),
+[local_files.cpp](src/app/cli/local_files.cpp) (collecting and hashing files)
+and one file per command group under [commands/](src/app/cli/commands/); plus
+the HTTP client [net/http_client.cpp](src/lib/net/http_client.cpp), which the
+server's forwarder uses too. A separate executable; it shares only `common`
+and `net` with the server.
 
 ```
-main -> cmd_<command>(global, vm)
+main -> run_command() -> Command::run(global, vm)   // kSend, kGet, ...
 └── connect(global)                                // every command except login/logout
     ├── open_session(global)
     │   ├── --server / --user (or FTC_SERVER / FTC_USER) required
