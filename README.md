@@ -10,7 +10,8 @@ nothing in it can change, and the target user can download the files.
 - Path traversal (`../`, absolute paths) is rejected
 - Two logs: `business.log` (who sent what to whom, JSON lines) and `technical.log`
 
-See [Requirements.md](Requirements.md) and [Architecture.md](Architecture.md) for the design.
+See [Requirements.md](Requirements.md) and [Architecture.md](Architecture.md) for the design,
+and [dev_info.md](dev_info.md) for how to add features.
 
 ### Status
 
@@ -386,13 +387,31 @@ build/bin/ftc --allow-http -u bob files $ID
 build/bin/ftc --allow-http -u bob get $ID downloads
 ```
 
+The same transaction can be built step by step instead of with `send`; it stays `open`
+(listed in `ftc outbox`, not yet visible to the receiver) until `commit`:
+
+```bash
+build/bin/ftc --allow-http -u alice create --to bob --comment "Q3 reports"
+# created b3c18f72-... for bob
+ID=b3c18f72-...
+build/bin/ftc --allow-http -u alice add $ID report/      # uploads report/a.txt, report/b.txt
+build/bin/ftc --allow-http -u alice add $ID notes.txt    # uploads notes.txt
+build/bin/ftc --allow-http -u alice rm $ID report/b.txt  # path as in 'ftc files', not a local path
+build/bin/ftc --allow-http -u alice files $ID
+build/bin/ftc --allow-http -u alice commit $ID
+# committed b3c18f72-... (2 files, 1234 bytes)
+```
+
 Notes:
 
 - `--to bob@siteB` sends to a user on another server, `--retention DAYS` sets `retention_days`.
 - `--comment "Q3 reports"` (`-m`) attaches a short note, shown in the COMMENT column of `inbox`/`outbox`.
 - `ftc outbox` lists the transactions you sent.
 - `get` does not overwrite existing files unless you add `--force`.
-- If an upload fails, `send` prints the id of the transaction it left `open`.
+- If an upload fails, `send` prints the id of the transaction it left `open`; finish it with
+  `add` and `commit`.
+- `add` replaces a file already in the transaction under the same path. `add` and `rm` only
+  work while the transaction is `open`; after `commit` they fail with `conflict`.
 - With TLS, use an `https://` URL and `--ca-file cert.pem` (or `FTC_CA_FILE`) for a self-signed certificate.
 
 ## 5. Check

@@ -13,6 +13,20 @@ Each release is split into two parts:
 
 Changes since `v0.7.0`, not tagged yet.
 
+### Business logic
+
+#### Added
+- `ftc create`, `ftc add`, `ftc rm`, `ftc commit`: build a transaction step by step. `create` opens a transaction and prints its id, `add` uploads files and folders into it (same path rules as `send`), `rm` removes files by their path in the transaction, `commit` closes it. `ftc send` still does all steps at once.
+
+### Technical
+
+#### Changed
+- `ftc` source split from one `main.cpp` into modules (`dispatch`, `session`, `password`, `reply`, `local_files`, `outgoing`) and one file per command group under `src/app/cli/commands/`. A command is a `Command` entry in a table, not a branch of an if-chain.
+
+#### Added
+- [dev_info.md](dev_info.md): how to add features, starting with `ftc` commands.
+- Integration test step for the step-by-step commands.
+
 ## [0.7.0] — 2026-10-20
 
 ### Business logic

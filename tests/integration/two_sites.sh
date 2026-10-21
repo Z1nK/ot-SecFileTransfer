@@ -105,5 +105,31 @@ wait_for 40 is_delivered "$id" || die "$id not delivered after siteB came back"
 ftc_as bob siteB get "$id" "$WORK/bob2" >/dev/null
 diff "$src/a.txt" "$WORK/bob2/a.txt" || die "late copy differs"
 
+# --- 6. Step by step: create, add, rm, commit ------------------------------
+log "6. alice -> carol@siteA step by step"
+id=$(ftc_as alice siteA create --to carol --comment "steps" | sent_id)
+[[ -n $id ]] || die "no transaction id from ftc create"
+[[ $(show_field alice siteA "$id" state) == open ]] || die "$id should be open after create"
+ftc_as alice siteA outbox | grep -q "$id" || die "alice's outbox misses open $id"
+ftc_as carol siteA inbox | grep -q "$id" && die "carol sees $id before commit"
+ftc_as alice siteA add "$id" "$src" >/dev/null
+ftc_as alice siteA add "$id" "$src/a.txt" >/dev/null  # sent as a.txt, next to report/
+ftc_as alice siteA files "$id" | grep -q ' a.txt$' || die "a.txt not added to $id"
+ftc_as alice siteA rm "$id" a.txt >/dev/null
+ftc_as alice siteA files "$id" | grep -q ' a.txt$' && die "a.txt still in $id after rm"
+if ftc_as alice siteA rm "$id" a.txt 2>"$WORK/err.txt"; then
+  die "rm of a missing file succeeded"
+fi
+grep -q notfound "$WORK/err.txt" || die "unexpected error: $(cat "$WORK/err.txt")"
+ftc_as alice siteA commit "$id" | grep -q "^committed $id" || die "commit of $id failed"
+[[ $(show_field alice siteA "$id" state) == committed ]] || die "$id not committed"
+if ftc_as alice siteA add "$id" "$src/a.txt" 2>"$WORK/err.txt"; then
+  die "add into a committed transaction succeeded"
+fi
+grep -q conflict "$WORK/err.txt" || die "unexpected error: $(cat "$WORK/err.txt")"
+ftc_as carol siteA get "$id" "$WORK/carol-steps" >/dev/null
+diff -r "$WORK/src/report" "$WORK/carol-steps/report" || die "carol's step-by-step copy differs"
+[[ ! -e $WORK/carol-steps/a.txt ]] || die "removed a.txt was delivered"
+
 ok=true
 log "PASS"

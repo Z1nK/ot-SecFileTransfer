@@ -20,6 +20,14 @@ constexpr std::string_view kCommands = R"(Commands:
   send --to USER[@SERVER] [--retention DAYS] [--comment TEXT] PATH...
                         create a transaction, upload the files and folders,
                         commit
+  create --to USER[@SERVER] [--retention DAYS] [--comment TEXT]
+                        create an open transaction and print its ID;
+                        then add files and commit it in separate steps
+  add ID PATH...        upload files and folders into an open transaction
+                        (replaces a file with the same path)
+  rm ID PATH...         remove files from an open transaction, by their
+                        path in the transaction (see 'ftc files ID')
+  commit ID             commit an open transaction; no changes after that
   inbox                 list transactions sent to you
   outbox                list transactions you sent
   show ID               show one transaction
@@ -31,7 +39,10 @@ constexpr std::string_view kCommands = R"(Commands:
 Run 'ftc COMMAND --help' for the options of a command.
 )";
 
-const std::array kAll{&kLogin, &kLogout, &kSend, &kInbox, &kOutbox, &kShow, &kFiles, &kGet};
+const std::array kAll{
+    &kLogin, &kLogout, &kSend, &kCreate, &kAdd,   &kRm,
+    &kCommit, &kInbox, &kOutbox, &kShow, &kFiles, &kGet,
+};
 
 const Command* find(std::string_view name) {
   const auto it = std::ranges::find(kAll, name, &Command::name);

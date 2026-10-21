@@ -864,8 +864,9 @@ parsing), [session.cpp](src/app/cli/session.cpp) (connect, login),
 [password.cpp](src/app/cli/password.cpp),
 [token_cache.cpp](src/app/cli/token_cache.cpp),
 [reply.cpp](src/app/cli/reply.cpp) (JSON replies),
-[local_files.cpp](src/app/cli/local_files.cpp) (collecting and hashing files)
-and one file per command group under [commands/](src/app/cli/commands/); plus
+[local_files.cpp](src/app/cli/local_files.cpp) (collecting and hashing files),
+[outgoing.cpp](src/app/cli/outgoing.cpp) (create, upload, commit; shared by
+`send` and the step-by-step commands) and one file per command group under [commands/](src/app/cli/commands/); plus
 the HTTP client [net/http_client.cpp](src/lib/net/http_client.cpp), which the
 server's forwarder uses too. A separate executable; it shares only `common`
 and `net` with the server.
@@ -894,6 +895,11 @@ HttpClient::<request>
       attempt(); on `auth` (401) and relogin set -> new token, attempt() once more
 ```
 
+- `ftc send` = `create_transaction` + `upload_files` + `commit_transaction`
+  (outgoing.cpp). `ftc create` / `add` / `commit` run one of them each;
+  `ftc rm` is `DELETE /transactions/{id}/files/{path}`. Files are collected
+  (`collect_files`) and IDs/paths parsed before `connect()`, so bad input
+  fails without a password prompt.
 - `ftc login`: always asks for the password and replaces the cached token.
 - `ftc logout`: `DELETE /auth/token` with the cached token, then deletes the
   file even if the server could not be told (warns unless the server said

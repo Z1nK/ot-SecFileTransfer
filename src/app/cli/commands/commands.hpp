@@ -2,8 +2,7 @@
 // The ftc commands. Each one declares its own options and runs against the
 // server; dispatch.cpp picks one by name, parses its arguments and runs it.
 #include "cli.hpp"
-
-#include <common/id.hpp>
+#include "outgoing.hpp"
 
 #include <boost/program_options.hpp>
 
@@ -33,6 +32,16 @@ extern const Command kLogout;
 // commands/send.cpp
 extern const Command kSend;
 
+// commands/compose.cpp
+extern const Command kCreate;
+extern const Command kAdd;
+extern const Command kRm;
+extern const Command kCommit;
+
+// --to, --retention, --comment of `send` and `create`.
+void new_transaction_options(po::options_description& desc);
+NewTransaction new_transaction_from(const po::variables_map& vm);
+
 // commands/query.cpp
 extern const Command kInbox;
 extern const Command kOutbox;
@@ -41,9 +50,5 @@ extern const Command kFiles;
 
 // commands/get.cpp
 extern const Command kGet;
-
-inline std::string tx_target(const common::TransactionId& id) {
-  return "/transactions/" + id.str();
-}
 
 }  // namespace confide::cli

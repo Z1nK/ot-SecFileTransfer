@@ -1,6 +1,7 @@
 #pragma once
-// Shared by the ftc sources: global options, exit codes, error helpers.
+// Shared by the ftc sources: global options, exit codes, error and URL helpers.
 #include <common/error.hpp>
+#include <common/id.hpp>
 
 #include <filesystem>
 #include <format>
@@ -28,6 +29,11 @@ struct Global {
 
 inline std::unexpected<Error> fail(ErrCode code, std::string detail) {
   return std::unexpected(Error::make(code, std::move(detail)));
+}
+
+// "/transactions/{id}", the base of every per-transaction request.
+inline std::string tx_target(const common::TransactionId& id) {
+  return "/transactions/" + id.str();
 }
 
 inline std::string describe(const Error& err) {

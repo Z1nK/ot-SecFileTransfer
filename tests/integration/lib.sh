@@ -143,7 +143,7 @@ ftc_as() {
     --ca-file "$WORK/cert.pem" "$@"
 }
 
-# The transaction id from `ftc send` output ("created <id> for ...").
+# The transaction id from `ftc send` / `ftc create` output ("created <id> for ...").
 sent_id() { awk '/^created / { print $2; exit }'; }
 
 # One field of `ftc show`.

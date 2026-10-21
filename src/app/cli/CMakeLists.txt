@@ -5,11 +5,13 @@ target_sources(${LOCAL_EXE_NAME} PRIVATE
   main.cpp
   dispatch.cpp
   local_files.cpp
+  outgoing.cpp
   password.cpp
   reply.cpp
   session.cpp
   token_cache.cpp
   commands/auth.cpp
+  commands/compose.cpp
   commands/get.cpp
   commands/query.cpp
   commands/send.cpp
