@@ -8,6 +8,7 @@ see [implementation_details.md](implementation_details.md); for the design,
 Each section is a checklist followed by a worked example.
 
 - [1. Add a command to the `ftc` client](#1-add-a-command-to-the-ftc-client)
+- [2. Add a REST endpoint to the server](#2-add-a-rest-endpoint-to-the-server)
 
 ---
 
@@ -61,7 +62,7 @@ The command only declares its options and does the work.
 | 8 | [implementation_details.md](implementation_details.md) §10 | The call tree, if the command does something new (not just one `client.call`). |
 
 If the command needs a server endpoint that does not exist yet, add that
-first, in `src/lib/api/handlers.cpp` (route table in `TransactionHandlers::register_routes`).
+first: see [2. Add a REST endpoint to the server](#2-add-a-rest-endpoint-to-the-server).
 
 ### Rules for commands
 
@@ -205,3 +206,190 @@ optional ones (see `get_options` in
 [commands/get.cpp](src/app/cli/commands/get.cpp): `DIR` defaults to `.`).
 Options can't be guessed from a prefix (`allow_guessing` is off), so
 `--forc` is an error and not `--force`.
+
+---
+
+## 2. Add a REST endpoint to the server
+
+### How a request reaches a handler
+
+```
+api/server.cpp     HttpServer: one coroutine per connection
+   │                 router.match(method, target)   -> 404 / 405 / 400 before any handler
+   │                 check route.access             -> 401 if the credentials don't fit
+   │                 route.handler(ctx)             -> 500 if it throws or sends nothing
+   │
+api/handlers.cpp   TransactionHandlers::<fn>(ctx)
+   │                 id_param / path_param          parse {id}, {path*}       -> 400
+   │                 read_body_string + decode_*    JSON request body         -> 400
+   │                 service_.<call>(ctx.caller, ...)
+   │                 ctx.exchange.send(Response::json(status, encode_*(...)))
+   │                 on error: co_return co_await fail(ctx, err)
+   │
+transaction/service.cpp   TransactionService: access rules, state, business log
+```
+
+The layers have separate jobs (see
+[implementation_details.md](implementation_details.md) §3–§5):
+
+- **Router / server**: path matching, authentication by `Access`, 404/405/401.
+- **Handler**: HTTP only. Parse parameters and body, call one service
+  function, encode the answer. No business rules.
+- **Service**: who may do what, in which state, and the business log entry.
+  Knows nothing about HTTP.
+
+A route is one `Def` in `TransactionHandlers::register_routes()`
+([api/handlers.cpp](src/lib/api/handlers.cpp)):
+
+```cpp
+Def{
+    .method = verb::delete_,
+    .pattern = "/transactions/{id}/files/{path*}",  // {name}: one segment, {name*}: the rest
+    .access = Access::user,                         // user | password | peer
+    .fn = &TransactionHandlers::remove_file,
+},
+```
+
+`Access` ([api/router.hpp](src/lib/api/router.hpp)): `user` takes Basic or a
+user token, `password` takes Basic only, `peer` takes only a peer's
+`accept_token` (use it for `/internal/...` routes).
+
+### Checklist
+
+| # | Where | What |
+|---|-------|------|
+| 1 | [transaction/service.hpp](src/lib/transaction/service.hpp) / [service.cpp](src/lib/transaction/service.cpp) | The service function, if no existing one does the work. Lock the transaction, check access (`may_write` / read rules), check the state, change it, record a business event. Return `forbidden`, `notfound`, `conflict` etc.; never an HTTP status. |
+| 2 | [logging/business_log.hpp](src/lib/logging/business_log.hpp) | A new `BizEventType` (and its name in `business_log.cpp`), if the action is new and must be audited. |
+| 3 | [api/json.hpp](src/lib/api/json.hpp) / [json.cpp](src/lib/api/json.cpp) | `decode_*` for a new request body, `encode_*` for a new response shape, with the JSON written out in the comment. Reuse `encode_transaction` / `encode_files` / `encode_file` when they fit. |
+| 4 | [api/handlers.hpp](src/lib/api/handlers.hpp) | Declare the handler with a comment `// METHOD /pattern -> status + body`, in the Users or Peers block. |
+| 5 | [api/handlers.cpp](src/lib/api/handlers.cpp) | The handler, and its `Def` in `register_routes()`. If the endpoint only reuses an existing handler (like `GET /internal/transactions/{id}` reuses `get`), the `Def` is all you add. |
+| 6 | [tests/unit/transaction/service_test.cpp](tests/unit/transaction/service_test.cpp) | Tests of the service rules: who is allowed, which states are refused. |
+| 7 | [tests/unit/api/json_test.cpp](tests/unit/api/json_test.cpp) | Tests for new `decode_*` / `encode_*` functions, including bad input. |
+| 8 | [tests/integration/two_sites.sh](tests/integration/two_sites.sh) | A step that calls the endpoint over HTTPS (through `ftc`, or `curl` with the saved token, as step 3 does) and checks status and result. There are no unit tests for `TransactionHandlers` themselves; this is where the HTTP mapping is tested. |
+| 9 | [README.md](README.md) §4 | A row in the "Use the API" table (users' endpoints; `/internal` is covered by its one row). |
+| 10 | [Architecture.md](Architecture.md) §8 | A row in the REST API table. |
+| 11 | [implementation_details.md](implementation_details.md) §3, §5 | A row in the route table, and a call tree under §5 if the handler does more than parse + one service call + send. |
+| 12 | [CHANGELOG.md](CHANGELOG.md) | An entry under `[Unreleased]` → Business logic → Added. |
+
+A new group of endpoints that has nothing to do with transactions (like
+`/auth/token`) gets its own handler class with its own `register_routes()`,
+as [api/auth_handlers.cpp](src/lib/api/auth_handlers.cpp) does, called from
+[src/app/main/main.cpp](src/app/main/main.cpp) next to the others.
+
+### Rules for handlers
+
+- **Every error goes through `fail()`.** Write
+  `co_return co_await fail(ctx, err);`. `fail()` turns the `ErrCode` into
+  the HTTP status (`status_for()`, table in
+  [implementation_details.md](implementation_details.md) §1), answers
+  `forbidden` as **404** so outsiders can't probe ids, and logs 5xx to the
+  technical log.
+- **Send exactly one response.** A handler that returns without sending
+  gets a 500 from the server.
+- **Parse parameters with the helpers.** `id_param(ctx)` and
+  `path_param(ctx)` give `validation` (400) on bad input. Path parameters
+  are already URL-decoded; never use them as paths before
+  `RelativePath::parse`.
+- **Limit what you read.** JSON bodies go through
+  `read_body_string(options_.max_json_bytes)`. File bodies are streamed in
+  `storage::kChunkBytes` chunks (see `upload`), never read whole.
+- **No business rules in the handler.** If the check depends on who the
+  caller is or what state the transaction is in, it goes into the service,
+  so the forwarder and the tests get the same rules.
+- **Pick the status from what happened:** `201` + body when something was
+  created, `200` + body for reads and state changes, `204`
+  (`Response::no_content()`) when there is nothing to return.
+
+### Worked example: `DELETE /transactions/{id}/files/{path*}`
+
+Removes a file from an open transaction. These are the pieces as they are
+in the code.
+
+**1. Service** ([transaction/service.cpp](src/lib/transaction/service.cpp)).
+All rules live here:
+
+```cpp
+Result<void> TransactionService::remove_file(const Caller& caller, const common::TransactionId& id,
+                                             const common::RelativePath& path) {
+  const auto mu = lock_for(id);
+  const std::scoped_lock lock(*mu);
+
+  auto tx = repo_.find(id);
+  if (!tx) {
+    return not_found(id);
+  }
+  if (!may_write(caller, *tx)) {
+    return forbidden(id);                      // handler answers 404
+  }
+  CFD_TRYV(require_mutable(tx->state));        // committed -> conflict (409)
+
+  const auto it = std::ranges::find(tx->files, path, &FileEntry::path);
+  if (it == tx->files.end()) {
+    return fail(ErrCode::notfound, "no such file: " + path.str());
+  }
+  CFD_TRYV(store_.remove_file(id, path));
+  tx->files.erase(it);
+  CFD_TRYV(repo_.save(*tx));
+
+  auto ev = event_for(BizEventType::file_removed, *tx, caller);
+  ev.file = path.str();
+  blog_.record(ev);
+  return {};
+}
+```
+
+**2. Handler declaration** ([api/handlers.hpp](src/lib/api/handlers.hpp)):
+
+```cpp
+  // DELETE /transactions/{id}/files/{path*} -> 204
+  asio::awaitable<void> remove_file(RequestContext& ctx);
+```
+
+**3. Handler** ([api/handlers.cpp](src/lib/api/handlers.cpp)). Parse, call,
+answer:
+
+```cpp
+asio::awaitable<void> TransactionHandlers::remove_file(RequestContext& ctx) {
+  auto id = id_param(ctx);
+  if (!id) {
+    co_return co_await fail(ctx, id.error());
+  }
+  auto path = path_param(ctx);
+  if (!path) {
+    co_return co_await fail(ctx, path.error());
+  }
+  auto removed = service_.remove_file(ctx.caller, *id, *path);
+  if (!removed) {
+    co_return co_await fail(ctx, removed.error());
+  }
+  co_await ctx.exchange.send(Response::no_content());
+}
+```
+
+**4. Route** in `register_routes()`, next to the other
+`/transactions/{id}/files/{path*}` routes (the `Def` shown above). Same
+pattern with a different method is fine; the router answers 405 for a
+method that has no route.
+
+**5. Build and try it:**
+
+```sh
+cmake --build build
+U=http://127.0.0.1:8080
+curl -u alice:alice-pw -X DELETE -w '%{http_code}\n' $U/transactions/$ID/files/report/a.txt
+# 204; again -> 404 {"error":"notfound",...}; after commit -> 409
+```
+
+**6. Tests:** `GroupTargetTest.MembersCannotWrite` in
+[service_test.cpp](tests/unit/transaction/service_test.cpp) checks that only
+the sender may remove; step 6 of
+[two_sites.sh](tests/integration/two_sites.sh) removes a file with
+`ftc rm`, checks that removing it again gives `notfound` and that the file
+is not delivered. Run:
+
+```sh
+ctest --test-dir build --output-on-failure
+```
+
+**7. Docs:** a row in README §4, Architecture §8 and implementation_details
+§3; the call tree in implementation_details §5.3; CHANGELOG entry.

@@ -24,7 +24,7 @@ Changes since `v0.7.0`, not tagged yet.
 - `ftc` source split from one `main.cpp` into modules (`dispatch`, `session`, `password`, `reply`, `local_files`, `outgoing`) and one file per command group under `src/app/cli/commands/`. A command is a `Command` entry in a table, not a branch of an if-chain.
 
 #### Added
-- [dev_info.md](dev_info.md): how to add features, starting with `ftc` commands.
+- [dev_info.md](dev_info.md): how to add features: `ftc` commands and REST endpoints.
 - Integration test step for the step-by-step commands.
 
 ## [0.7.0] — 2026-10-20
