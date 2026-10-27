@@ -299,6 +299,19 @@ the member function: `[this, fn](RequestContext& ctx) { return (this->*fn)(ctx);
 | POST | `/internal/transactions/{id}/commit` | peer | `commit` | (same as user commit) |
 | POST | `/auth/token` | password | `AuthHandlers::login` | `auth.issue_token` |
 | DELETE | `/auth/token` | user | `AuthHandlers::logout` | `auth.revoke_token` |
+| POST | `/admin/token` | admin_password | `AdminHandlers::login` | `sessions.issue_admin_token` |
+| DELETE | `/admin/token` | admin | `AdminHandlers::logout` | `auth.revoke_token` |
+| GET | `/admin/transactions` | admin | `AdminHandlers::list` | `service.admin_list` |
+| GET | `/admin/transactions/{id}` | admin | `AdminHandlers::get` | `service.admin_get` |
+| DELETE | `/admin/transactions/{id}` | admin | `AdminHandlers::remove` | `service.admin_delete` |
+| PUT | `/admin/transactions/{id}/retention` | admin | `AdminHandlers::retention` | `service.set_retention` |
+| GET | `/admin/status` | admin | `AdminHandlers::status` | `service.admin_list`, `list_outgoing`, `sessions.sessions` |
+| GET | `/admin/sessions` | admin | `AdminHandlers::sessions` | `sessions.sessions` |
+| DELETE | `/admin/sessions/{user}` | admin | `AdminHandlers::revoke_user` | `sessions.revoke_user` |
+| GET | `/admin/log` | admin | `AdminHandlers::log` | `logging::read_business_log` |
+
+The `/admin/*` routes ([api/admin_handlers.cpp](src/lib/api/admin_handlers.cpp))
+are registered by `main` only when `auth.admin_group` is set.
 
 `{name}` matches one path segment, `{name*}` matches the rest including `/`.
 
@@ -310,6 +323,12 @@ the server accepts before the handler runs:
 | `user` | `Basic base64(user:pass)` **or** `Bearer ftu_<token>` |
 | `password` | `Basic` only (a token must not buy a new token) |
 | `peer` | `Bearer <peer accept_token>`; user tokens are refused |
+| `admin` | `Basic` **or** `Bearer fta_<admin token>`, then `is_member(user, auth.admin_group)` on every request; not a member = 403 |
+| `admin_password` | `Basic` only, same membership check (POST /admin/token) |
+
+User (`ftu_`) and admin (`fta_`) tokens live in one `SessionStore` with a
+`Scope`; `verify` only accepts a token of the scope the route asks for, so an
+admin token opens no user route and a user token no admin route.
 
 ---
 

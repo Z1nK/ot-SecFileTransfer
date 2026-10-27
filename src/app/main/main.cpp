@@ -5,6 +5,7 @@
 //
 // Only wiring lives here.
 
+#include <api/admin_handlers.hpp>
 #include <api/auth_handlers.hpp>
 #include <api/authenticator.hpp>
 #include <api/handlers.hpp>
@@ -39,6 +40,7 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -115,9 +117,24 @@ forwarder::ForwarderOptions forwarder_options(const config::Config& cfg) {
   return options;
 }
 
-// api::IAuthenticator on top of auth::Authenticator: hands it the
-// Authorization header and turns the name it returns into a Caller.
-class HeaderAuthenticator final : public api::IAuthenticator {
+// What GET /admin/status and GET /admin/log need from the config.
+api::AdminOptions admin_options(const config::Config& cfg) {
+  api::AdminOptions options{
+      .business_log = cfg.log().dir / "business.log",
+      .instance = cfg.instance_name(),
+      .version = std::string{version::kProjectVersionString},
+      .auth_provider = cfg.auth().provider == config::AuthProvider::ldap ? "ldap" : "local",
+  };
+  for (const auto& p : cfg.peers()) {
+    options.peers.push_back({.name = p.name, .host = p.host, .port = p.port});
+  }
+  return options;
+}
+
+// api::IAuthenticator and api::IAdminSessions on top of
+// auth::Authenticator: hands it the Authorization header and turns the name
+// it returns into a Caller.
+class HeaderAuthenticator final : public api::IAuthenticator, public api::IAdminSessions {
 public:
   explicit HeaderAuthenticator(const auth::Authenticator& auth) : auth_(auth) {}
 
@@ -138,6 +155,18 @@ public:
     return transaction::Caller{.name = std::move(name), .is_peer = true};
   }
 
+  Result<transaction::Caller> authenticate_admin(const api::RequestHeader& req,
+                                                 std::string_view source) const override {
+    CFD_TRY(name, auth_.authenticate_admin(authorization(req), source));
+    return transaction::Caller{.name = std::move(name), .is_peer = false, .is_admin = true};
+  }
+
+  Result<transaction::Caller> authenticate_admin_password(const api::RequestHeader& req,
+                                                          std::string_view source) const override {
+    CFD_TRY(name, auth_.authenticate_admin_password(authorization(req), source));
+    return transaction::Caller{.name = std::move(name), .is_peer = false, .is_admin = true};
+  }
+
   Result<api::IssuedToken> issue_token(std::string_view user) const override {
     CFD_TRY(issued, auth_.issue_token(user));
     return api::IssuedToken{.token = std::move(issued.token), .expires_at = issued.expires_at};
@@ -146,6 +175,25 @@ public:
   void revoke_token(const api::RequestHeader& req) const override {
     auth_.revoke_token(authorization(req));
   }
+
+  Result<api::IssuedToken> issue_admin_token(std::string_view user) const override {
+    CFD_TRY(issued, auth_.issue_token(user, auth::Scope::admin));
+    return api::IssuedToken{.token = std::move(issued.token), .expires_at = issued.expires_at};
+  }
+
+  std::vector<api::SessionView> sessions() const override {
+    std::vector<api::SessionView> out;
+    for (auto& s : auth_.sessions()) {
+      out.push_back({.user = std::move(s.user),
+                     .admin = s.scope == auth::Scope::admin,
+                     .created = s.created,
+                     .last_used = s.last_used,
+                     .expires_at = s.expires_at});
+    }
+    return out;
+  }
+
+  std::size_t revoke_user(std::string_view user) const override { return auth_.revoke_user(user); }
 
 private:
   static std::string_view authorization(const api::RequestHeader& req) {
@@ -204,6 +252,14 @@ Result<void> serve(const config::Config& cfg, const common::IClock& clock, loggi
   const HeaderAuthenticator authenticator(users_and_peers);
   api::AuthHandlers auth_handlers(authenticator, tlog);
   CFD_TRYV(auth_handlers.register_routes(router));
+
+  // No admin group, no /admin/* routes at all.
+  api::AdminHandlers admin_handlers(service, authenticator, authenticator, blog, tlog, clock,
+                                    admin_options(cfg));
+  if (!cfg.auth().admin_group.empty()) {
+    CFD_TRYV(admin_handlers.register_routes(router));
+    tlog.info(kTag, "admin API on for members of '{}'", cfg.auth().admin_group);
+  }
 
   CFD_TRY(options, api::ServerOptions::from_config(cfg));
   const bool tls = options.tls != nullptr;

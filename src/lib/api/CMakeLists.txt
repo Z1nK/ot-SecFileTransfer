@@ -1,7 +1,9 @@
 set(LOCAL_LIB_NAME api)
 
 add_library(${LOCAL_LIB_NAME} STATIC
+  admin_handlers.cpp
   auth_handlers.cpp
+  authenticator.cpp
   handlers.cpp
   http.cpp
   json.cpp

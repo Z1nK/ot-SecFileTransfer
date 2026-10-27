@@ -152,6 +152,14 @@ Result<transaction::ReceiveRequest> decode_receive(std::string_view text) {
   };
 }
 
+Result<int> decode_retention(std::string_view text) {
+  CFD_TRY(obj, parse_object(text));
+  if (!obj.contains("days")) {
+    return invalid("missing field: days");
+  }
+  return get_optional_int(obj, "days");
+}
+
 std::string encode_receive(const transaction::ReceiveRequest& req) {
   return json::serialize(json::object{
       {"id", req.id.str()},
@@ -187,6 +195,71 @@ std::string encode_files(const std::vector<transaction::FileEntry>& files) {
 
 std::string encode_file(const transaction::FileEntry& file) {
   return json::serialize(file_object(file));
+}
+
+std::string encode_admin_transaction(const transaction::Transaction& tx) {
+  auto obj = transaction_object(tx);
+  obj["origin_server"] = tx.origin_server;
+  json::array files;
+  files.reserve(tx.files.size());
+  for (const auto& f : tx.files) {
+    files.push_back(file_object(f));
+  }
+  obj["files"] = std::move(files);
+  return json::serialize(obj);
+}
+
+std::string encode_admin_transaction_list(const std::vector<transaction::Transaction>& txs) {
+  json::array arr;
+  arr.reserve(txs.size());
+  for (const auto& tx : txs) {
+    auto obj = transaction_object(tx);
+    obj["origin_server"] = tx.origin_server;
+    arr.push_back(std::move(obj));
+  }
+  return json::serialize(json::object{{"transactions", std::move(arr)}});
+}
+
+std::string encode_sessions(const std::vector<SessionView>& sessions) {
+  json::array arr;
+  arr.reserve(sessions.size());
+  for (const auto& s : sessions) {
+    arr.push_back(json::object{
+        {"user", s.user},
+        {"scope", s.admin ? "admin" : "user"},
+        {"created", common::format_iso8601(s.created)},
+        {"last_used", common::format_iso8601(s.last_used)},
+        {"expires_at", common::format_iso8601(s.expires_at)},
+    });
+  }
+  return json::serialize(json::object{{"sessions", std::move(arr)}});
+}
+
+std::string encode_revoked(std::string_view user, std::size_t count) {
+  return json::serialize(json::object{{"user", user}, {"revoked", count}});
+}
+
+std::string encode_status(const ServerStatus& status) {
+  json::array peers;
+  peers.reserve(status.peers.size());
+  for (const auto& p : status.peers) {
+    peers.push_back(json::object{{"name", p.name}, {"host", p.host}, {"port", p.port}});
+  }
+  json::object counts;
+  for (const auto& [state, n] : status.transactions) {
+    counts[state] = n;
+  }
+  return json::serialize(json::object{
+      {"instance", status.instance},
+      {"version", status.version},
+      {"auth_provider", status.auth_provider},
+      {"started_at", common::format_iso8601(status.started_at)},
+      {"uptime_s", (status.now - status.started_at).count()},
+      {"peers", std::move(peers)},
+      {"transactions", std::move(counts)},
+      {"outgoing", status.outgoing},
+      {"sessions", status.sessions},
+  });
 }
 
 std::string encode_token(std::string_view token, std::string_view user,

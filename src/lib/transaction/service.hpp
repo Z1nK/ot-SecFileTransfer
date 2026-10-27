@@ -21,8 +21,9 @@ namespace confide::transaction {
 // Who is calling. Filled by `api` from auth's principal, so this module does
 // not depend on `auth`.
 struct Caller {
-  std::string name;      // user name, or the peer's server name
-  bool is_peer = false;  // authenticated with the peer token (/internal/*)
+  std::string name;       // user name, or the peer's server name
+  bool is_peer = false;   // authenticated with the peer token (/internal/*)
+  bool is_admin = false;  // member of auth.admin_group on an /admin/* route
 };
 
 struct CreateRequest {
@@ -41,6 +42,15 @@ struct ReceiveRequest {
   common::Timestamp created_at;
   common::Timestamp expires_at;
   std::string comment{};
+};
+
+// Which transactions TransactionService::admin_list() returns; empty or
+// nullopt fields match everything.
+struct AdminFilter {
+  std::string user{};  // sender or target user
+  std::optional<State> state{};
+  std::optional<common::Timestamp> from{};  // created_at >= from
+  std::optional<common::Timestamp> to{};    // created_at < to
 };
 
 enum class Box : std::uint8_t {
@@ -114,6 +124,8 @@ private:
 //   - target user: list and read once committed or delivered; for a group
 //                  target, every member of the group (MembershipCheck)
 //   - peer:        receive / add files / commit on transactions it pushed
+//   - admin:       metadata of every transaction, delete, change retention;
+//                  never file contents
 //   - anyone else: `forbidden` (api may turn that into 404)
 //
 // Thread-safe. One mutex per transaction protects its state machine;
@@ -164,6 +176,23 @@ public:
   // `conflict` if the id exists, `unknown_destination` if target_user is not
   // a local user. Followed by begin_upload() and commit() as the peer.
   Result<Transaction> receive(const Caller& peer, const ReceiveRequest& req);
+
+  // --- Admin --------------------------------------------------------------
+  // All `forbidden` unless caller.is_admin.
+
+  // Newest first. Empty for a non-admin.
+  std::vector<Transaction> admin_list(const Caller& admin, const AdminFilter& filter) const;
+
+  Result<Transaction> admin_get(const Caller& admin, const common::TransactionId& id) const;
+
+  // Deletes the transaction with its files, in any state, and logs
+  // `admin_deleted`. A forward in progress fails and is not retried.
+  Result<void> admin_delete(const Caller& admin, const common::TransactionId& id);
+
+  // expires_at = created_at + `days` (1..max_retention_days); a date in the
+  // past leaves it to the next retention sweep. Logs `retention_changed`.
+  // `gone` for an expired transaction.
+  Result<Transaction> set_retention(const Caller& admin, const common::TransactionId& id, int days);
 
   // --- Forwarder and retention --------------------------------------------
 

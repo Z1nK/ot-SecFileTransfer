@@ -32,13 +32,17 @@ asio::awaitable<void> HttpServer::Impl::dispatch(Exchange& ex, const std::string
       return auth.authenticate_peer(req);
     case Access::password:
       return auth.authenticate_password(req, source);
+    case Access::admin:
+      return auth.authenticate_admin(req, source);
+    case Access::admin_password:
+      return auth.authenticate_admin_password(req, source);
     case Access::user:
       break;
     }
     return auth.authenticate_user(req, source);
   }();
   if (!caller) {
-    if (caller.error().code == ErrCode::throttled) {
+    if (caller.error().code == ErrCode::throttled || caller.error().code == ErrCode::forbidden) {
       tlog.warn(kTag, "{} {} from {}: {}", sv(req.method_string()), sv(req.target()), source,
                 caller.error().detail);
     }
