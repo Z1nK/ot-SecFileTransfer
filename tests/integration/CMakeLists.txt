@@ -17,3 +17,16 @@ add_test(NAME integration.two_sites
 set_tests_properties(integration.two_sites PROPERTIES
   LABELS integration
   TIMEOUT 180)
+
+# Admin interface with LDAP users: needs a server built WITH_LDAP and the
+# directory of docker/docker-compose.yml. Skipped (exit 77) unless
+# CONFIDE_LDAP_TEST_URI is set when ctest runs:
+#   CONFIDE_LDAP_TEST_URI=ldap://localhost:1389 ctest -L ldap
+if(WITH_LDAP)
+  add_test(NAME integration.ldap_admin
+    COMMAND ${BASH_PROGRAM} ${CMAKE_CURRENT_SOURCE_DIR}/ldap_admin.sh $<TARGET_FILE_DIR:confide-server>)
+  set_tests_properties(integration.ldap_admin PROPERTIES
+    LABELS "integration;ldap"
+    SKIP_RETURN_CODE 77
+    TIMEOUT 120)
+endif()

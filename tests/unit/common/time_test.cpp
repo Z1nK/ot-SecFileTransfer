@@ -12,6 +12,7 @@ using confide::common::IClock;
 using confide::common::is_expired;
 using confide::common::kMaxRetentionDays;
 using confide::common::parse_iso8601;
+using confide::common::parse_time_arg;
 using confide::common::SystemClock;
 using confide::common::Timestamp;
 
@@ -129,4 +130,25 @@ TEST(SystemClock, NowIsCurrentUtcSecond) {
 
   EXPECT_GE(now, before);
   EXPECT_LE(now, after);
+}
+
+TEST(ParseTimeArg, AcceptsExactDayNowAndAges) {
+  EXPECT_EQ(parse_time_arg("2026-09-20T01:02:03Z", kT).value(),
+            sys_days{2026y / September / 20} + 1h + 2min + 3s);
+  EXPECT_EQ(parse_time_arg("2026-09-20", kT).value(), sys_days{2026y / September / 20});
+  EXPECT_EQ(parse_time_arg("now", kT).value(), kT);
+  EXPECT_EQ(parse_time_arg("90s", kT).value(), kT - 90s);
+  EXPECT_EQ(parse_time_arg("30m", kT).value(), kT - 30min);
+  EXPECT_EQ(parse_time_arg("2h", kT).value(), kT - 2h);
+  EXPECT_EQ(parse_time_arg("7d", kT).value(), kT - days{7});
+  EXPECT_EQ(parse_time_arg("1w", kT).value(), kT - weeks{1});
+}
+
+TEST(ParseTimeArg, RejectsEverythingElse) {
+  for (const std::string_view bad :
+       {"", "h", "2", "-2h", "2y", "2 h", "2026-13-01", "yesterday", "2026-09-20T01:02:03"}) {
+    auto r = parse_time_arg(bad, kT);
+    ASSERT_FALSE(r.has_value()) << bad;
+    EXPECT_EQ(r.error().code, ErrCode::validation);
+  }
 }

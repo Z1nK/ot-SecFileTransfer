@@ -79,6 +79,18 @@ public:
     return std::unexpected(Error::make(ErrCode::auth, "bad peer token"));
   }
 
+  // "Bearer admin-token" -> admin root; a user's token is forbidden.
+  Result<Caller> authenticate_admin(const RequestHeader& req,
+                                    std::string_view /*source*/) const override {
+    if (req[http::field::authorization] == "Bearer admin-token") {
+      return Caller{.name = "root", .is_admin = true};
+    }
+    if (req[http::field::authorization] == "Bearer user-token") {
+      return std::unexpected(Error::make(ErrCode::forbidden, "admin rights required"));
+    }
+    return std::unexpected(Error::make(ErrCode::auth, "bad credentials"));
+  }
+
   Result<IssuedToken> issue_token(std::string_view user) const override {
     return IssuedToken{.token = "ftu_for_" + std::string{user},
                        .expires_at = std::chrono::sys_days{std::chrono::year{2026} / 9 / 24}};
@@ -178,6 +190,8 @@ protected:
 
     add(http::verb::get, "/echo/{name}", Access::user, echo);
     add(http::verb::post, "/peer/{name}", Access::peer, echo);
+    add(http::verb::get, "/adm/{name}", Access::admin, echo);
+    add(http::verb::post, "/adm-login/{name}", Access::admin_password, echo);
     add(http::verb::put, "/count", Access::user, count);
     add(http::verb::post, "/json", Access::user, json_echo);
     add(http::verb::get, "/file", Access::user, [this](RequestContext& ctx) -> asio::awaitable<void> {
@@ -292,6 +306,23 @@ TEST_F(ServerTest, PeerRouteNeedsPeerToken) {
   auto res = call(http::verb::post, "/peer/x", {}, "Bearer peer-token");
   EXPECT_EQ(res.result(), http::status::ok);
   EXPECT_EQ(res.body(), "name=x;caller=siteB;peer=1;box=-");
+}
+
+TEST_F(ServerTest, AdminRoutesNeedAnAdmin) {
+  EXPECT_EQ(call(http::verb::get, "/adm/x", {}, "").result(), http::status::unauthorized);
+  EXPECT_EQ(call(http::verb::get, "/adm/x").result(), http::status::forbidden);
+  EXPECT_EQ(call(http::verb::get, "/adm/x", {}, "Bearer peer-token").result(),
+            http::status::unauthorized);
+
+  auto res = call(http::verb::get, "/adm/x", {}, "Bearer admin-token");
+  EXPECT_EQ(res.result(), http::status::ok);
+  EXPECT_EQ(res.body(), "name=x;caller=root;peer=0;box=-");
+}
+
+TEST_F(ServerTest, AdminPasswordRoutesHaveNoAdminsByDefault) {
+  // FakeAuth keeps IAuthenticator's default: nobody is admin.
+  EXPECT_EQ(call(http::verb::post, "/adm-login/x", {}, "Basic good").result(),
+            http::status::forbidden);
 }
 
 TEST_F(ServerTest, LoginNeedsThePassword) {

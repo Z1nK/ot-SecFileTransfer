@@ -6,6 +6,7 @@
 #include <set>
 #include <string>
 
+using confide::auth::Scope;
 using confide::auth::SessionOptions;
 using confide::auth::SessionStore;
 using confide::common::ErrCode;
@@ -78,4 +79,65 @@ TEST(SessionStore, LoginDropsExpiredSessions) {
   clock.advance(seconds{100});
   ASSERT_TRUE(store.issue("carol").has_value());
   EXPECT_EQ(store.size(), 1U);
+}
+
+TEST(SessionStore, AdminAndUserTokensDoNotMix) {
+  FakeClock clock;
+  SessionStore store(clock, SessionOptions{});
+  const auto user = store.issue("alice").value();
+  const auto admin = store.issue("alice", Scope::admin).value();
+  EXPECT_TRUE(user.token.starts_with("ftu_"));
+  EXPECT_TRUE(admin.token.starts_with("fta_"));
+
+  EXPECT_EQ(store.verify(user.token).value(), "alice");
+  EXPECT_EQ(store.verify(admin.token, Scope::admin).value(), "alice");
+  EXPECT_FALSE(store.verify(admin.token).has_value());
+  EXPECT_FALSE(store.verify(user.token, Scope::admin).has_value());
+}
+
+TEST(SessionStore, AdminTokensHaveTheirOwnLifetime) {
+  FakeClock clock;
+  SessionStore store(clock, SessionOptions{.ttl = seconds{1000},
+                                           .idle = seconds{1000},
+                                           .admin_ttl = seconds{100},
+                                           .admin_idle = seconds{50}});
+  const auto user = store.issue("alice").value();
+  const auto admin = store.issue("alice", Scope::admin).value();
+  EXPECT_EQ(admin.expires_at, clock.now() + seconds{100});
+
+  clock.advance(seconds{50});  // admin idle limit reached
+  EXPECT_FALSE(store.verify(admin.token, Scope::admin).has_value());
+  EXPECT_TRUE(store.verify(user.token).has_value());
+}
+
+TEST(SessionStore, RevokeUserEndsBothScopes) {
+  FakeClock clock;
+  SessionStore store(clock, SessionOptions{});
+  const auto user = store.issue("bob").value();
+  const auto admin = store.issue("bob", Scope::admin).value();
+  const auto other = store.issue("alice").value();
+
+  EXPECT_EQ(store.revoke_user("bob"), 2U);
+  EXPECT_FALSE(store.verify(user.token).has_value());
+  EXPECT_FALSE(store.verify(admin.token, Scope::admin).has_value());
+  EXPECT_TRUE(store.verify(other.token).has_value());
+  EXPECT_EQ(store.revoke_user("nobody"), 0U);
+}
+
+TEST(SessionStore, ListsLiveSessionsOldestFirst) {
+  FakeClock clock;
+  SessionStore store(clock, SessionOptions{.ttl = seconds{100}, .idle = seconds{100}});
+  ASSERT_TRUE(store.issue("gone").has_value());
+  clock.advance(seconds{60});
+  ASSERT_TRUE(store.issue("alice").has_value());
+  clock.advance(seconds{1});
+  ASSERT_TRUE(store.issue("bob", Scope::admin).has_value());
+  clock.advance(seconds{40});  // "gone" is past its ttl
+
+  const auto list = store.list();
+  ASSERT_EQ(list.size(), 2U);
+  EXPECT_EQ(list[0].user, "alice");
+  EXPECT_EQ(list[0].scope, Scope::user);
+  EXPECT_EQ(list[1].user, "bob");
+  EXPECT_EQ(list[1].scope, Scope::admin);
 }
