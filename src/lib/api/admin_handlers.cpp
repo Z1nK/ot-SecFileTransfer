@@ -3,8 +3,8 @@
 #include "logging/business_log_reader.hpp"
 
 #include <array>
-#include <chrono>
 #include <charconv>
+#include <chrono>
 #include <optional>
 #include <string>
 #include <utility>
@@ -86,17 +86,66 @@ Result<void> AdminHandlers::register_routes(Router& router) {
     M fn;
   };
   const std::array defs{
-      Def{verb::post, "/admin/token", Access::admin_password, &AdminHandlers::login},
-      Def{verb::delete_, "/admin/token", Access::admin, &AdminHandlers::logout},
-      Def{verb::get, "/admin/transactions", Access::admin, &AdminHandlers::list},
-      Def{verb::get, "/admin/transactions/{id}", Access::admin, &AdminHandlers::get},
-      Def{verb::delete_, "/admin/transactions/{id}", Access::admin, &AdminHandlers::remove},
-      Def{verb::put, "/admin/transactions/{id}/retention", Access::admin,
-          &AdminHandlers::retention},
-      Def{verb::get, "/admin/status", Access::admin, &AdminHandlers::status},
-      Def{verb::get, "/admin/sessions", Access::admin, &AdminHandlers::sessions},
-      Def{verb::delete_, "/admin/sessions/{user}", Access::admin, &AdminHandlers::revoke_user},
-      Def{verb::get, "/admin/log", Access::admin, &AdminHandlers::log},
+      Def{
+          .method = verb::post,
+          .pattern = "/admin/token",
+          .access = Access::admin_password,
+          .fn = &AdminHandlers::login,
+      },
+      Def{
+          .method = verb::delete_,
+          .pattern = "/admin/token",
+          .access = Access::admin,
+          .fn = &AdminHandlers::logout,
+      },
+      Def{
+          .method = verb::get,
+          .pattern = "/admin/transactions",
+          .access = Access::admin,
+          .fn = &AdminHandlers::list,
+      },
+      Def{
+          .method = verb::get,
+          .pattern = "/admin/transactions/{id}",
+          .access = Access::admin,
+          .fn = &AdminHandlers::get,
+      },
+      Def{
+          .method = verb::delete_,
+          .pattern = "/admin/transactions/{id}",
+          .access = Access::admin,
+          .fn = &AdminHandlers::remove,
+      },
+      Def{
+          .method = verb::put,
+          .pattern = "/admin/transactions/{id}/retention",
+          .access = Access::admin,
+          .fn = &AdminHandlers::retention,
+      },
+      Def{
+          .method = verb::get,
+          .pattern = "/admin/status",
+          .access = Access::admin,
+          .fn = &AdminHandlers::status,
+      },
+      Def{
+          .method = verb::get,
+          .pattern = "/admin/sessions",
+          .access = Access::admin,
+          .fn = &AdminHandlers::sessions,
+      },
+      Def{
+          .method = verb::delete_,
+          .pattern = "/admin/sessions/{user}",
+          .access = Access::admin,
+          .fn = &AdminHandlers::revoke_user,
+      },
+      Def{
+          .method = verb::get,
+          .pattern = "/admin/log",
+          .access = Access::admin,
+          .fn = &AdminHandlers::log,
+      },
   };
   for (const auto& d : defs) {
     CFD_TRYV(router.add(Route{
