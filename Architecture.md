@@ -236,6 +236,7 @@ sequenceDiagram
 | DELETE | `/auth/token` | Log out: revoke the presented user token |
 | POST/PUT | `/internal/transactions/...` | Server-to-server push (peer token only) |
 | GET | `/internal/transactions/{id}` | State of a pushed transaction, so a retried push can resume (peer token only) |
+| * | `/admin/...` | Administration for members of `auth.admin_group`: all transactions (metadata only), delete, retention, status, sessions, business log. Own admin token (`POST /admin/token`); group membership checked on every request |
 
 ## 9. On-Disk Layout
 

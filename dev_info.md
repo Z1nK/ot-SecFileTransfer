@@ -61,6 +61,13 @@ The command only declares its options and does the work.
 | 7 | [CHANGELOG.md](CHANGELOG.md) | An entry under `[Unreleased]` → Business logic → Added. |
 | 8 | [implementation_details.md](implementation_details.md) §10 | The call tree, if the command does something new (not just one `client.call`). |
 
+An admin command (`ftc admin NAME`) goes into
+[commands/admin.cpp](src/app/cli/commands/admin.cpp) instead: add it to
+`kAdminAll` and to the `kAdminCommands` help text there (steps 2 and 3 don't
+apply), and connect with `connect(global, Scope::admin)`. Don't name an
+option `--user`, `--server` or `--ca-file`: the global options take them
+wherever they appear on the command line.
+
 If the command needs a server endpoint that does not exist yet, add that
 first: see [2. Add a REST endpoint to the server](#2-add-a-rest-endpoint-to-the-server).
 

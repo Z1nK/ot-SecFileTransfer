@@ -23,6 +23,11 @@ token_ttl_s = 3600               # ftc login token lifetime
 token_idle_s = 900               # token dropped after this long unused
 users_file = "users"             # `name:password_hash` per line, see users.example; chmod 600
 groups_file = "groups"           # optional, `name:member,member` per line, see groups.example
+# admin_group = "admins"         # members may use /admin/* and `ftc admin`; empty/unset = no admin API.
+                                 # Local: must be a group above. LDAP: a group name in group_base_dn --
+                                 # whoever can change that group in LDAP can make admins here.
+# admin_token_ttl_s = 3600       # `ftc admin login` token lifetime; default = token_ttl_s
+# admin_token_idle_s = 900       # admin token dropped after this long unused; default = token_idle_s
 
 # Users can also be listed here instead of (or as well as) in users_file:
 # [[user]]

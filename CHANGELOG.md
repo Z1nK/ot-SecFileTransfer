@@ -15,7 +15,14 @@ Changes since `v0.7.0`, not tagged yet.
 
 ### Business logic
 
+#### Changed
+- A local group named in `auth.admin_group` is refused as a transaction target (`unknown_destination`), so one send can't reach every admin.
+- Peer tokens may not start with `fta_` either (the prefix of admin tokens).
+
 #### Added
+- **Admin interface**: `auth.admin_group` names the group whose members administer the server, for both local and LDAP users. Admins can list all transactions (metadata only, never file contents), show one with its files, delete one, change its retention, see server status and live sessions, end a user's sessions, and read business-log lines for a time range. REST under `/admin/...`, CLI as `ftc admin ...`. Without `admin_group` there is no admin API.
+- Admin tokens (`fta_...`, from `POST /admin/token` / `ftc admin login`) are separate from user tokens and only valid on `/admin/...`; their lifetime is `auth.admin_token_ttl_s` / `auth.admin_token_idle_s` (default: the user token values). Group membership is checked on every admin request, so removal from the group takes effect at once.
+- Business-log events `admin_deleted`, `retention_changed`, `sessions_revoked`, with the admin as `actor`.
 - `ftc create`, `ftc add`, `ftc rm`, `ftc commit`: build a transaction step by step. `create` opens a transaction and prints its id, `add` uploads files and folders into it (same path rules as `send`), `rm` removes files by their path in the transaction, `commit` closes it. `ftc send` still does all steps at once.
 
 ### Technical
@@ -24,6 +31,11 @@ Changes since `v0.7.0`, not tagged yet.
 - `ftc` source split from one `main.cpp` into modules (`dispatch`, `session`, `password`, `reply`, `local_files`, `outgoing`) and one file per command group under `src/app/cli/commands/`. A command is a `Command` entry in a table, not a branch of an if-chain.
 
 #### Added
+- `logging::read_business_log`: business-log lines in a time range from `business.log.1` and `business.log`.
+- `common::parse_time_arg`: `YYYY-MM-DD`, ISO 8601, `now` or an age like `2h` / `7d`, for `ftc admin` options.
+- `net::HttpClient::login` / `logout` take the token endpoint (`/auth/token` or `/admin/token`).
+- Unit tests for admin sessions, authentication, service operations, config and log reading; integration test step 7 for the admin interface.
+- Integration test [ldap_admin.sh](tests/integration/ldap_admin.sh) (`ctest -L ldap`): the admin interface with LDAP users and group changes, against the docker test directory; skipped unless `CONFIDE_LDAP_TEST_URI` is set.
 - [dev_info.md](dev_info.md): how to add features: `ftc` commands and REST endpoints.
 - Integration test step for the step-by-step commands.
 
