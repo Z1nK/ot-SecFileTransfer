@@ -1,3 +1,6 @@
+# cppcoreguidelines-avoid-reference-coroutine-parameters is off: API handlers
+# take RequestContext& and are always co_await-ed by the server, so the
+# context outlives them (see Handler in src/lib/api/router.hpp).
 Checks: '-*,
 bugprone-*,
 cppcoreguidelines-*,
@@ -22,6 +25,7 @@ cert-*,
 -cppcoreguidelines-owning-memory,
 -bugprone-reserved-identifier,
 -cert-err58-cpp,
+-cppcoreguidelines-avoid-reference-coroutine-parameters,
 '
 CheckOptions:
   - key:             misc-non-private-member-variables-in-classes.IgnoreClassesWithAllMemberVariablesBeingPublic

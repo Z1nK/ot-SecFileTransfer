@@ -46,6 +46,11 @@ struct RequestContext {
   std::optional<std::string_view> query_value(std::string_view key) const;
 };
 
+// Takes the context by reference: the server keeps it in its own coroutine
+// frame and `co_await`s the handler right away, so the context outlives the
+// handler. A handler must therefore never be co_spawn()ed or stored to run
+// later. (This is why clang-tidy's
+// cppcoreguidelines-avoid-reference-coroutine-parameters is off.)
 using Handler = std::function<asio::awaitable<void>(RequestContext&)>;
 
 struct Route {
