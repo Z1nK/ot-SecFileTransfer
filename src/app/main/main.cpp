@@ -66,11 +66,17 @@ std::string describe(const Error& err) {
 
 // FR-13: a local target must be a known user or group of the user
 // directory, a remote one a configured peer. Whether the user exists on the
-// peer is only known when forwarding.
+// peer is only known when forwarding. The admin group is not a target: one
+// send would reach every admin.
 transaction::DestinationCheck destination_check(const config::Config& cfg,
                                                 const auth::IUserDirectory& directory) {
   return [&cfg, &directory](std::string_view user, std::string_view server) -> Result<void> {
     if (server.empty() || server == cfg.instance_name()) {
+      if (!cfg.auth().admin_group.empty() && user == cfg.auth().admin_group) {
+        return std::unexpected(
+            Error::make(ErrCode::unknown_destination,
+                        std::format("'{}' is the admin group, not a recipient", user)));
+      }
       CFD_TRY(is_user, directory.has_user(user));
       if (is_user) {
         return {};

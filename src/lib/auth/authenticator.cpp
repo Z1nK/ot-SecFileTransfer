@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <format>
 #include <memory>
 #include <optional>
 
@@ -61,10 +62,13 @@ Result<Authenticator> Authenticator::create(const config::Config& cfg,
     CFD_TRY(digest, Sha256::of(p.accept_token));
     peers.push_back(Peer{.name = p.name, .token = digest});
   }
+  const auto& auth = cfg.auth();
   auto sessions = std::make_unique<SessionStore>(
-      clock, SessionOptions{.ttl = std::chrono::seconds{cfg.auth().token_ttl_s},
-                            .idle = std::chrono::seconds{cfg.auth().token_idle_s}});
-  return Authenticator(directory, std::move(peers), std::move(sessions),
+      clock, SessionOptions{.ttl = std::chrono::seconds{auth.token_ttl_s},
+                            .idle = std::chrono::seconds{auth.token_idle_s},
+                            .admin_ttl = std::chrono::seconds{auth.admin_token_ttl_s},
+                            .admin_idle = std::chrono::seconds{auth.admin_token_idle_s}});
+  return Authenticator(directory, auth.admin_group, std::move(peers), std::move(sessions),
                        std::make_unique<LoginLimiter>(clock, limits));
 }
 
@@ -108,8 +112,32 @@ Result<std::string> Authenticator::authenticate_password(std::string_view author
   return name;
 }
 
-Result<IssuedToken> Authenticator::issue_token(std::string_view user) const {
-  return sessions_->issue(user);
+Result<std::string> Authenticator::require_admin(std::string user) const {
+  // is_member() is false when LDAP can't be reached: no admin rights then.
+  if (admin_group_.empty() || !directory_->is_member(user, admin_group_)) {
+    return std::unexpected(
+        Error::make(ErrCode::forbidden, std::format("admin rights required, {} has none", user)));
+  }
+  return user;
+}
+
+Result<std::string> Authenticator::authenticate_admin(std::string_view authorization,
+                                                      std::string_view source) const {
+  if (const auto token = credentials(authorization, "Bearer")) {
+    CFD_TRY(user, sessions_->verify(*token, Scope::admin));
+    return require_admin(std::move(user));
+  }
+  return authenticate_admin_password(authorization, source);
+}
+
+Result<std::string> Authenticator::authenticate_admin_password(std::string_view authorization,
+                                                               std::string_view source) const {
+  CFD_TRY(user, authenticate_password(authorization, source));
+  return require_admin(std::move(user));
+}
+
+Result<IssuedToken> Authenticator::issue_token(std::string_view user, Scope scope) const {
+  return sessions_->issue(user, scope);
 }
 
 void Authenticator::revoke_token(std::string_view authorization) const {
@@ -126,7 +154,7 @@ Result<std::string> Authenticator::authenticate_peer(std::string_view authorizat
   if (!token || token->empty()) {
     return denied("expected Bearer peer token");
   }
-  if (token->starts_with(SessionStore::kPrefix)) {
+  if (token->starts_with(SessionStore::kPrefix) || token->starts_with(SessionStore::kAdminPrefix)) {
     return denied("user tokens are not accepted from peers");
   }
   CFD_TRY(digest, Sha256::of(*token));

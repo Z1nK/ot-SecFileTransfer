@@ -117,7 +117,8 @@ Result<void> Parser::parse_auth(AuthCfg& out) {
   CFD_TRY(tbl, section(root_, "auth"));
   if (tbl != nullptr) {
     warn_unknown(*tbl, "auth.",
-                 {"provider", "token_ttl_s", "token_idle_s", "users_file", "groups_file", "ldap"});
+                 {"provider", "token_ttl_s", "token_idle_s", "users_file", "groups_file", "ldap",
+                  "admin_group", "admin_token_ttl_s", "admin_token_idle_s"});
     std::string provider;
     CFD_TRYV(get(*tbl, "provider", "auth", provider));
     if (provider == "ldap") {
@@ -135,6 +136,7 @@ Result<void> Parser::parse_auth(AuthCfg& out) {
     if (out.token_idle_s == 0) {
       return invalid("auth.token_idle_s must be > 0");
     }
+    CFD_TRYV(parse_admin(*tbl, out));
   }
 
   // One user source only: the other one's settings are reported, not loaded.
@@ -173,6 +175,31 @@ Result<void> Parser::parse_auth(AuthCfg& out) {
   }
   if (root_.contains("group")) {
     CFD_TRYV(parse_inline_groups(seen, seen_groups, out));
+  }
+  // A typo here would silently mean "nobody is admin".
+  if (!out.admin_group.empty() && !seen_groups.contains(out.admin_group)) {
+    return invalid(
+        std::format("auth.admin_group: '{}' is not a configured group", out.admin_group));
+  }
+  return {};
+}
+
+Result<void> Parser::parse_admin(const toml::value& auth, AuthCfg& out) {
+  CFD_TRYV(get(auth, "admin_group", "auth", out.admin_group));
+  if (!out.admin_group.empty() && !is_valid_name(out.admin_group)) {
+    return invalid(std::format("auth.admin_group: '{}' must be 1-64 chars of [A-Za-z0-9._-]",
+                               out.admin_group));
+  }
+  // Admin tokens live as long as user tokens unless set otherwise.
+  out.admin_token_ttl_s = out.token_ttl_s;
+  out.admin_token_idle_s = out.token_idle_s;
+  CFD_TRYV(get(auth, "admin_token_ttl_s", "auth", out.admin_token_ttl_s));
+  CFD_TRYV(get(auth, "admin_token_idle_s", "auth", out.admin_token_idle_s));
+  if (out.admin_token_ttl_s == 0) {
+    return invalid("auth.admin_token_ttl_s must be > 0");
+  }
+  if (out.admin_token_idle_s == 0) {
+    return invalid("auth.admin_token_idle_s must be > 0");
   }
   return {};
 }
