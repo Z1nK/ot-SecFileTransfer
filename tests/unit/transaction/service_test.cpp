@@ -167,3 +167,68 @@ TEST_F(GroupTargetTest, RetentionDefaultsAndLimit) {
                 .code,
             ErrCode::validation);
 }
+
+// --- Admin ------------------------------------------------------------------
+
+namespace {
+
+using AdminServiceTest = GroupTargetTest;
+using confide::transaction::AdminFilter;
+using confide::transaction::State;
+
+const Caller kAdmin{.name = "root", .is_admin = true};
+
+}  // namespace
+
+TEST_F(AdminServiceTest, NonAdminsGetNothing) {
+  const auto tx = create_open();
+  EXPECT_TRUE(service_->admin_list(carol_, {}).empty());
+  EXPECT_EQ(service_->admin_get(carol_, tx.id).error().code, ErrCode::forbidden);
+  EXPECT_EQ(service_->admin_delete(carol_, tx.id).error().code, ErrCode::forbidden);
+  EXPECT_EQ(service_->set_retention(carol_, tx.id, 3).error().code, ErrCode::forbidden);
+}
+
+TEST_F(AdminServiceTest, ListsEveryTransactionWithFilters) {
+  const auto open = create_open();
+  const auto done = create_open();
+  ASSERT_TRUE(service_->commit(carol_, done.id).has_value());
+
+  EXPECT_EQ(service_->admin_list(kAdmin, {}).size(), 2U);
+  const auto committed = service_->admin_list(kAdmin, AdminFilter{.state = State::committed});
+  ASSERT_EQ(committed.size(), 1U);
+  EXPECT_EQ(committed[0].id, done.id);
+  EXPECT_EQ(service_->admin_list(kAdmin, AdminFilter{.user = "devs"}).size(), 2U);
+  EXPECT_EQ(service_->admin_list(kAdmin, AdminFilter{.user = "carol"}).size(), 2U);
+  EXPECT_TRUE(service_->admin_list(kAdmin, AdminFilter{.user = "dave"}).empty());
+  const auto now = clock_.now();
+  EXPECT_EQ(service_->admin_list(kAdmin, AdminFilter{.from = now}).size(), 2U);
+  EXPECT_TRUE(service_->admin_list(kAdmin, AdminFilter{.to = now}).empty());
+
+  // Open transactions too, with their files: admins see all metadata.
+  const auto got = service_->admin_get(kAdmin, open.id).value();
+  EXPECT_EQ(got.state, State::open);
+  EXPECT_EQ(got.files.size(), 1U);
+}
+
+TEST_F(AdminServiceTest, DeletesInAnyState) {
+  const auto open = create_open();
+  const auto done = create_open();
+  ASSERT_TRUE(service_->commit(carol_, done.id).has_value());
+
+  ASSERT_TRUE(service_->admin_delete(kAdmin, open.id).has_value());
+  ASSERT_TRUE(service_->admin_delete(kAdmin, done.id).has_value());
+  EXPECT_TRUE(service_->admin_list(kAdmin, {}).empty());
+  EXPECT_EQ(service_->get(carol_, done.id).error().code, ErrCode::notfound);
+  EXPECT_EQ(service_->admin_delete(kAdmin, done.id).error().code, ErrCode::notfound);
+}
+
+TEST_F(AdminServiceTest, SetsRetentionFromCreation) {
+  const auto tx = create_open();
+  const auto changed = service_->set_retention(kAdmin, tx.id, 5).value();
+  EXPECT_EQ(changed.expires_at, tx.created_at + std::chrono::days{5});
+  EXPECT_EQ(service_->admin_get(kAdmin, tx.id)->expires_at, changed.expires_at);
+
+  // 1..max_retention_days (7 here).
+  EXPECT_EQ(service_->set_retention(kAdmin, tx.id, 0).error().code, ErrCode::validation);
+  EXPECT_EQ(service_->set_retention(kAdmin, tx.id, 8).error().code, ErrCode::validation);
+}

@@ -420,6 +420,55 @@ TEST(ConfigLoader, GroupsFileRules) {
   expect_bad("", "[[group]]\nname = \"ops\"\nmembers = \"bob\"\n", "expected an array of strings");
 }
 
+TEST(ConfigLoader, AdminGroupDefaultsToNoneAndUserTokenTimes) {
+  GroupsFixture f("devs:alice\n", "token_ttl_s = 600\ntoken_idle_s = 60\n");
+  auto cfg = ConfigLoader::from_file(f.config);
+  ASSERT_TRUE(cfg.has_value()) << cfg.error().detail;
+  EXPECT_TRUE(cfg->auth().admin_group.empty());
+  EXPECT_EQ(cfg->auth().admin_token_ttl_s, 600U);
+  EXPECT_EQ(cfg->auth().admin_token_idle_s, 60U);
+}
+
+TEST(ConfigLoader, AdminGroupAndTokenTimes) {
+  GroupsFixture f("admins:alice\n",
+                  "admin_group = \"admins\"\nadmin_token_ttl_s = 300\nadmin_token_idle_s = 120\n");
+  auto cfg = ConfigLoader::from_file(f.config);
+  ASSERT_TRUE(cfg.has_value()) << cfg.error().detail;
+  EXPECT_EQ(cfg->auth().admin_group, "admins");
+  EXPECT_EQ(cfg->auth().admin_token_ttl_s, 300U);
+  EXPECT_EQ(cfg->auth().admin_token_idle_s, 120U);
+  EXPECT_EQ(cfg->auth().token_ttl_s, 3600U);  // user tokens unchanged
+}
+
+TEST(ConfigLoader, AdminGroupRules) {
+  auto expect_bad = [](std::string_view extra, std::string_view part) {
+    GroupsFixture f("admins:alice\n", extra);
+    auto cfg = ConfigLoader::from_file(f.config);
+    ASSERT_FALSE(cfg.has_value()) << extra;
+    EXPECT_EQ(cfg.error().code, ErrCode::validation);
+    EXPECT_NE(cfg.error().detail.find(part), std::string::npos) << cfg.error().detail;
+  };
+  // A typo must not silently leave the server without admins.
+  expect_bad("admin_group = \"admin\"\n", "'admin' is not a configured group");
+  expect_bad("admin_group = \"a@b\"\n", "auth.admin_group");
+  expect_bad("admin_group = \"admins\"\nadmin_token_ttl_s = 0\n", "admin_token_ttl_s must be > 0");
+  expect_bad("admin_group = \"admins\"\nadmin_token_idle_s = 0\n",
+             "admin_token_idle_s must be > 0");
+}
+
+TEST(ConfigLoader, PeerTokenMustNotLookLikeAnAdminToken) {
+  const std::string t1(40, 'a');
+  expect_invalid(with(std::format(R"(
+[[peer]]
+name = "b"
+host = "h"
+token = "{}"
+accept_token = "fta_{}"
+)",
+                                  t1, std::string(40, 'b'))),
+                 "fta_");
+}
+
 TEST(ConfigLoader, GroupsFileMissingIsIo) {
   GroupsFixture f("devs:alice\n");
   fs::remove(f.groups);

@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 
 # Release builds get the version from the git tag: CI turns tag vX.Y.Z into
 # -DAPP_VERSION=X.Y.Z. Local builds keep the 0.0.0 default.
-set(APP_VERSION "0.7.1" CACHE STRING "Application version X.Y.Z, set by CI from the git tag")
+set(APP_VERSION "0.7.5" CACHE STRING "Application version X.Y.Z, set by CI from the git tag")
 if(NOT APP_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
   message(FATAL_ERROR "APP_VERSION '${APP_VERSION}' is not X.Y.Z")
 endif()
@@ -17,6 +17,7 @@ set(PROJECT_NAMESPACE confide)
 
 option(WITH_GOOGLE_TEST "Whether to build Google test" ON)
 option(WITH_LDAP "Whether to build LDAP authentication support (needs OpenLDAP)" ON)
+option(WITH_EXAMPLES "Whether to build the example-* programs" ON)
 
 set(CMAKE_MODULE_PATH ${CMAKE_CURRENT_LIST_DIR}/cmake/modules)
 set(CMAKE_CONFIG_PATH ${CMAKE_CURRENT_LIST_DIR}/cmake/configs)

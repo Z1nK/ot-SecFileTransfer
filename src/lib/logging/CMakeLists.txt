@@ -4,6 +4,7 @@ find_package(Threads REQUIRED)
 
 add_library(${LOCAL_LIB_NAME} STATIC
   business_log.cpp
+  business_log_reader.cpp
   json.cpp
   sink.cpp
   tech_log.cpp

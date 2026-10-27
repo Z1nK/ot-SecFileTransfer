@@ -24,8 +24,8 @@ std::string token_problem(std::string_view secret) {
   if (!std::ranges::all_of(secret, [](char c) { return c > ' ' && c < 0x7F; })) {
     return "must be visible ASCII characters only (no spaces)";
   }
-  if (secret.starts_with("ftu_")) {
-    return "must not start with ftu_ (the prefix of user tokens)";
+  if (secret.starts_with("ftu_") || secret.starts_with("fta_")) {
+    return "must not start with ftu_ or fta_ (the prefixes of user and admin tokens)";
   }
   return {};
 }

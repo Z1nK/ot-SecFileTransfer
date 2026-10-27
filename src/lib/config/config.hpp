@@ -106,6 +106,12 @@ struct AuthCfg {
   // one may go unused before it is dropped.
   uint32_t token_ttl_s = 3600;
   uint32_t token_idle_s = 900;
+  // Members of this group may use /admin/*; empty = no admin API. A local
+  // group must exist; an LDAP one is looked up by name like any group.
+  std::string admin_group{};
+  // Admin tokens from POST /admin/token; default to the user values.
+  uint32_t admin_token_ttl_s = 3600;
+  uint32_t admin_token_idle_s = 900;
   AuthProvider provider = AuthProvider::local;
   // Only used with provider = ldap; users/groups above stay empty then.
   LdapCfg ldap{};
@@ -132,7 +138,7 @@ inline constexpr std::size_t kMinPeerTokenLength = 32;
 // the one WE present to `name`; `accept_token` is the one `name` must
 // present to us -- never reuse one secret in both directions. Both are at
 // least kMinPeerTokenLength visible ASCII characters, not starting with
-// "ftu_" (user tokens), and every secret appears once across all peers:
+// "ftu_" or "fta_" (user and admin tokens), and every secret appears once across all peers:
 // the accept_token alone tells which peer is calling.
 struct PeerCfg {
   std::string name;

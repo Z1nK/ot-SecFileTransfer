@@ -14,6 +14,7 @@ using confide::auth::Authenticator;
 using confide::auth::IUserDirectory;
 using confide::auth::LocalDirectory;
 using confide::auth::PasswordHash;
+using confide::auth::Scope;
 using confide::common::base64_encode;
 using confide::common::ByteSpan;
 using confide::common::ErrCode;
@@ -295,4 +296,95 @@ TEST(Authenticator, DirectoryOutageDoesNotCountAsFailure) {
     EXPECT_EQ(auth.authenticate_password(basic("alice:pw"), kSource).error().code,
               ErrCode::unavailable);
   }
+}
+
+// --- Admin ------------------------------------------------------------------
+
+namespace {
+
+// alice is in "admins", bob is not; admin tokens last 600 s.
+Config admin_config() {
+  return Config("siteA", StorageCfg{.root = "/tmp/x"}, RestCfg{},
+                TlsCfg{.enabled = false, .cert_path = {}, .key_path = {}, .ca_path = {}},
+                AuthCfg{.users = {{.name = "alice", .password_hash = hash_of("a-pw")},
+                                  {.name = "bob", .password_hash = hash_of("b-pw")}},
+                        .groups = {{.name = "admins", .members = {"alice"}}},
+                        .admin_group = "admins",
+                        .admin_token_ttl_s = 600,
+                        .admin_token_idle_s = 300},
+                LogCfg{}, RetentionCfg{});
+}
+
+class AdminAuthTest : public ::testing::Test {
+protected:
+  AdminAuthTest()
+      : cfg_(admin_config())
+      , directory_(LocalDirectory::create(cfg_).value())
+      , auth_(Authenticator::create(cfg_, *directory_, clock_).value()) {}
+
+  Config cfg_;
+  std::unique_ptr<LocalDirectory> directory_;
+  FakeClock clock_;
+  Authenticator auth_;
+};
+
+}  // namespace
+
+TEST_F(AdminAuthTest, MembersOfTheAdminGroupAreAdmins) {
+  EXPECT_EQ(auth_.authenticate_admin(basic("alice:a-pw"), kSource).value(), "alice");
+  EXPECT_EQ(auth_.authenticate_admin_password(basic("alice:a-pw"), kSource).value(), "alice");
+}
+
+TEST_F(AdminAuthTest, OtherUsersAreForbidden) {
+  auto r = auth_.authenticate_admin(basic("bob:b-pw"), kSource);
+  ASSERT_FALSE(r.has_value());
+  EXPECT_EQ(r.error().code, ErrCode::forbidden);
+  // A wrong password is still 401, not 403: nothing is told about rights.
+  EXPECT_EQ(auth_.authenticate_admin(basic("alice:nope"), kSource).error().code, ErrCode::auth);
+}
+
+TEST_F(AdminAuthTest, OnlyAdminTokensOpenAdminRoutes) {
+  const auto user = auth_.issue_token("alice").value();
+  const auto admin = auth_.issue_token("alice", Scope::admin).value();
+  EXPECT_EQ(admin.expires_at, clock_.now() + std::chrono::seconds{600});
+
+  EXPECT_EQ(auth_.authenticate_admin("Bearer " + admin.token, kSource).value(), "alice");
+  EXPECT_EQ(auth_.authenticate_admin("Bearer " + user.token, kSource).error().code, ErrCode::auth);
+  // ...and admin tokens don't open user routes or the token endpoint.
+  EXPECT_EQ(auth_.authenticate_user("Bearer " + admin.token, kSource).error().code, ErrCode::auth);
+  EXPECT_EQ(auth_.authenticate_admin_password("Bearer " + admin.token, kSource).error().code,
+            ErrCode::auth);
+  // Never mistaken for a peer token either.
+  EXPECT_EQ(auth_.authenticate_peer("Bearer " + admin.token).error().code, ErrCode::auth);
+}
+
+TEST_F(AdminAuthTest, AdminTokenOfANonMemberIsForbidden) {
+  // Membership is checked on each request, not when the token was issued.
+  const auto admin = auth_.issue_token("bob", Scope::admin).value();
+  EXPECT_EQ(auth_.authenticate_admin("Bearer " + admin.token, kSource).error().code,
+            ErrCode::forbidden);
+}
+
+TEST_F(AdminAuthTest, SessionsCanBeListedAndRevoked) {
+  const auto bob = auth_.issue_token("bob").value();
+  ASSERT_TRUE(auth_.issue_token("alice", Scope::admin).has_value());
+  EXPECT_EQ(auth_.sessions().size(), 2U);
+  EXPECT_EQ(auth_.revoke_user("bob"), 1U);
+  EXPECT_EQ(auth_.authenticate_user("Bearer " + bob.token, kSource).error().code, ErrCode::auth);
+  EXPECT_EQ(auth_.sessions().size(), 1U);
+}
+
+TEST(Authenticator, NoAdminGroupMeansNoAdmins) {
+  const FakeClock clock;
+  const FakeDirectory directory(std::string{"alice"});
+  auto auth = Authenticator::create(make_config({}), directory, clock).value();
+  EXPECT_EQ(auth.authenticate_admin(basic("alice:pw"), kSource).error().code, ErrCode::forbidden);
+}
+
+TEST(Authenticator, UnreachableDirectoryGivesNoAdminRights) {
+  // FakeDirectory::is_member is always false, as LDAP's is when it is down.
+  const FakeClock clock;
+  const FakeDirectory directory(std::string{"alice"});
+  auto auth = Authenticator::create(admin_config(), directory, clock).value();
+  EXPECT_EQ(auth.authenticate_admin(basic("alice:pw"), kSource).error().code, ErrCode::forbidden);
 }

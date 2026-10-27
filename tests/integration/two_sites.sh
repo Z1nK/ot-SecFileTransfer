@@ -9,6 +9,9 @@
 #   4. Unknown destinations are refused up front.
 #   5. With siteB down, a transaction waits `committed` and is delivered
 #      once siteB is back.
+#   6. Step by step: create, add, rm, commit.
+#   7. Admin: root (group "admins" on siteA) lists, changes retention, reads
+#      the business log, ends sessions and deletes; others are refused.
 #
 #   two_sites.sh <bin folder> [work folder]
 #
@@ -35,8 +38,9 @@ finish() {
 trap finish EXIT
 
 make_cert
-site_init siteA alice carol
+site_init siteA alice carol root
 site_init siteB bob
+SITE_ADMINS[siteA]=root
 site_config siteA siteB
 site_config siteB siteA
 site_start siteA
@@ -104,6 +108,78 @@ site_start siteB
 wait_for 40 is_delivered "$id" || die "$id not delivered after siteB came back"
 ftc_as bob siteB get "$id" "$WORK/bob2" >/dev/null
 diff "$src/a.txt" "$WORK/bob2/a.txt" || die "late copy differs"
+
+# --- 6. Step by step: create, add, rm, commit ------------------------------
+log "6. alice -> carol@siteA step by step"
+id=$(ftc_as alice siteA create --to carol --comment "steps" | sent_id)
+[[ -n $id ]] || die "no transaction id from ftc create"
+[[ $(show_field alice siteA "$id" state) == open ]] || die "$id should be open after create"
+ftc_as alice siteA outbox | grep -q "$id" || die "alice's outbox misses open $id"
+ftc_as carol siteA inbox | grep -q "$id" && die "carol sees $id before commit"
+ftc_as alice siteA add "$id" "$src" >/dev/null
+ftc_as alice siteA add "$id" "$src/a.txt" >/dev/null  # sent as a.txt, next to report/
+ftc_as alice siteA files "$id" | grep -q ' a.txt$' || die "a.txt not added to $id"
+ftc_as alice siteA rm "$id" a.txt >/dev/null
+ftc_as alice siteA files "$id" | grep -q ' a.txt$' && die "a.txt still in $id after rm"
+if ftc_as alice siteA rm "$id" a.txt 2>"$WORK/err.txt"; then
+  die "rm of a missing file succeeded"
+fi
+grep -q notfound "$WORK/err.txt" || die "unexpected error: $(cat "$WORK/err.txt")"
+ftc_as alice siteA commit "$id" | grep -q "^committed $id" || die "commit of $id failed"
+[[ $(show_field alice siteA "$id" state) == committed ]] || die "$id not committed"
+if ftc_as alice siteA add "$id" "$src/a.txt" 2>"$WORK/err.txt"; then
+  die "add into a committed transaction succeeded"
+fi
+grep -q conflict "$WORK/err.txt" || die "unexpected error: $(cat "$WORK/err.txt")"
+ftc_as carol siteA get "$id" "$WORK/carol-steps" >/dev/null
+diff -r "$WORK/src/report" "$WORK/carol-steps/report" || die "carol's step-by-step copy differs"
+[[ ! -e $WORK/carol-steps/a.txt ]] || die "removed a.txt was delivered"
+
+# --- 7. Admin ------------------------------------------------------------------
+log "7. admin interface on siteA"
+ftc_as root siteA admin login | grep -q "admin session for root" || die "admin login failed"
+ftc_as root siteA admin list | grep -q "$id" || die "admin list misses $id"
+ftc_as root siteA admin list --who carol --state committed | grep -q "$id" \
+  || die "admin list filter misses $id"
+ftc_as root siteA admin show "$id" | grep -q "a.txt\|random.bin" || die "admin show has no files"
+ftc_as root siteA admin retention "$id" 5 | grep -q "now expires at" || die "retention change failed"
+ftc_as root siteA admin status | grep -q "instance *siteA" || die "admin status lacks the instance"
+# To a file first: grep -q would stop reading early and fail ftc with SIGPIPE.
+ftc_as root siteA admin log --from 1h >"$WORK/admin-log.txt"
+grep -q '"event":"tx_created"' "$WORK/admin-log.txt" || die "admin log has no tx_created"
+
+# Not an admin: 403, with or without a user token.
+if ftc_as carol siteA admin list 2>"$WORK/err.txt"; then
+  die "carol used the admin API"
+fi
+grep -q forbidden "$WORK/err.txt" || die "unexpected error: $(cat "$WORK/err.txt")"
+ftc_as root siteA login >/dev/null  # root's user token, next to the admin token
+token=$(cat "$WORK"/ftc-state/ftc/tokens/root@localhost_"${SITE_PORT[siteA]}")
+code=$(curl -s -o /dev/null -w '%{http_code}' --cacert "$WORK/cert.pem" \
+  -H "Authorization: Bearer $token" "https://localhost:${SITE_PORT[siteA]}/admin/status")
+[[ $code == 401 ]] || die "a user token on /admin gave HTTP $code, want 401"
+
+# The admin group is no recipient.
+if ftc_as alice siteA send --to admins "$src/a.txt" 2>"$WORK/err.txt"; then
+  die "send to the admin group succeeded"
+fi
+grep -q unknown_destination "$WORK/err.txt" || die "unexpected error: $(cat "$WORK/err.txt")"
+
+ftc_as root siteA admin sessions | grep -q "^carol " || die "carol has no session to end"
+ftc_as root siteA admin kick carol | grep -q "ended [1-9]" || die "kick ended no session"
+ftc_as root siteA admin sessions | grep -q "^carol " && die "carol still has a session"
+
+ftc_as root siteA admin delete "$id" --yes | grep -q "deleted $id" || die "admin delete failed"
+ftc_as root siteA admin list | grep -q "$id" && die "$id still listed after delete"
+for ev in retention_changed sessions_revoked admin_deleted; do
+  grep -q "\"event\":\"$ev\".*\"actor\":\"root\"" "$WORK/siteA/logs/business.log" \
+    || die "no $ev by root in the business log"
+done
+# The admin API does not exist where no admin group is configured.
+code=$(curl -s -o /dev/null -w '%{http_code}' --cacert "$WORK/cert.pem" \
+  -u bob:pw-bob "https://localhost:${SITE_PORT[siteB]}/admin/status")
+[[ $code == 404 ]] || die "/admin on siteB gave HTTP $code, want 404"
+ftc_as root siteA admin logout | grep -q "admin session ended" || die "admin logout failed"
 
 ok=true
 log "PASS"

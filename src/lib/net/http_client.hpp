@@ -35,7 +35,7 @@ struct Credentials {
   std::string password;
 };
 
-// Answer to POST /auth/token.
+// Answer to POST /auth/token (and POST /admin/token).
 struct Login {
   std::string token;
   std::string user;        // as the server spells it
@@ -75,12 +75,16 @@ public:
   // `validation` if the CA bundle can't be loaded.
   static Result<HttpClient> create(ServerUrl url, ClientOptions options = {});
 
-  // POST /auth/token with the password (Basic); the only request that sends
-  // it. On success the client uses the new token from then on.
-  Result<Login> login(const Credentials& creds);
+  // Token endpoints: users log in at /auth/token, admins at /admin/token.
+  static constexpr std::string_view kUserTokenTarget = "/auth/token";
+  static constexpr std::string_view kAdminTokenTarget = "/admin/token";
 
-  // DELETE /auth/token: the server forgets the current token.
-  Result<void> logout();
+  // POST `target` with the password (Basic); the only request that sends
+  // it. On success the client uses the new token from then on.
+  Result<Login> login(const Credentials& creds, std::string_view target = kUserTokenTarget);
+
+  // DELETE `target`: the server forgets the current token.
+  Result<void> logout(std::string_view target = kUserTokenTarget);
 
   void set_token(std::string_view token);
 

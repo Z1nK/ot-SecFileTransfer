@@ -19,9 +19,11 @@ Result<std::string> url_decode(std::string_view text);
 
 // Who may call a route; checked by the server before the handler runs.
 enum class Access : std::uint8_t {
-  user,      // a local user (Basic auth or token)
-  password,  // a local user with Basic auth only (POST /auth/token)
-  peer,      // a peer server with its peer token (/internal/*)
+  user,            // a local user (Basic auth or token)
+  password,        // a local user with Basic auth only (POST /auth/token)
+  peer,            // a peer server with its peer token (/internal/*)
+  admin,           // a member of auth.admin_group (Basic auth or admin token)
+  admin_password,  // the same with Basic auth only (POST /admin/token)
 };
 
 // URL-decoded values captured by a route pattern, by name.
@@ -44,6 +46,11 @@ struct RequestContext {
   std::optional<std::string_view> query_value(std::string_view key) const;
 };
 
+// Takes the context by reference: the server keeps it in its own coroutine
+// frame and `co_await`s the handler right away, so the context outlives the
+// handler. A handler must therefore never be co_spawn()ed or stored to run
+// later. (This is why clang-tidy's
+// cppcoreguidelines-avoid-reference-coroutine-parameters is off.)
 using Handler = std::function<asio::awaitable<void>(RequestContext&)>;
 
 struct Route {

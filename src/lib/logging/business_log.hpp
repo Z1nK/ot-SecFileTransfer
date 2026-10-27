@@ -23,6 +23,10 @@ enum class BizEventType : std::uint8_t {
   received,    // stored from a peer (receiver side)
   downloaded,  // a whole file was streamed to the target user
   expired,     // deleted by the retention job
+  // Admin API; `actor` is the admin.
+  admin_deleted,      // transaction deleted by an admin
+  retention_changed,  // new expiry in `retention_days`
+  sessions_revoked,   // every session of `subject` ended; no `tx`
 };
 
 std::string_view to_string(BizEventType type);
@@ -33,12 +37,13 @@ std::string_view to_string(BizEventType type);
 //   blog.record({.type = BizEventType::file_added, .tx = id, .actor = "alice",
 //                .file = "report/a.csv", .size = 10240, .sha256 = hex});
 //
-// `type` and `tx` are required; everything else is optional. Empty strings
-// and nullopt fields are left out of the JSON line.
+// `type` is required, and `tx` for every transaction event; everything else
+// is optional. Empty strings and nullopt fields are left out of the JSON line.
 struct BizEvent {
   BizEventType type;
-  common::TransactionId tx;
+  std::optional<common::TransactionId> tx;
   std::string actor{};                // user name, "peer:<server>" or "system"
+  std::string subject{};              // user an admin action was about
   std::string from_user{};            // sender of the transaction
   std::string to_user{};              // target user
   std::string to_server{};            // target server; empty = local delivery
@@ -47,6 +52,7 @@ struct BizEvent {
   std::optional<std::string> sha256{};
   std::optional<uint32_t> file_count{};  // committed / forwarded / received
   std::optional<uint64_t> total_bytes{};
+  std::optional<int> retention_days{};  // retention_changed
 };
 
 // Audit trail of who sent what to whom. Unlike TechLog it has no levels

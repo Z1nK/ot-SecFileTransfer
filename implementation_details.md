@@ -299,6 +299,19 @@ the member function: `[this, fn](RequestContext& ctx) { return (this->*fn)(ctx);
 | POST | `/internal/transactions/{id}/commit` | peer | `commit` | (same as user commit) |
 | POST | `/auth/token` | password | `AuthHandlers::login` | `auth.issue_token` |
 | DELETE | `/auth/token` | user | `AuthHandlers::logout` | `auth.revoke_token` |
+| POST | `/admin/token` | admin_password | `AdminHandlers::login` | `sessions.issue_admin_token` |
+| DELETE | `/admin/token` | admin | `AdminHandlers::logout` | `auth.revoke_token` |
+| GET | `/admin/transactions` | admin | `AdminHandlers::list` | `service.admin_list` |
+| GET | `/admin/transactions/{id}` | admin | `AdminHandlers::get` | `service.admin_get` |
+| DELETE | `/admin/transactions/{id}` | admin | `AdminHandlers::remove` | `service.admin_delete` |
+| PUT | `/admin/transactions/{id}/retention` | admin | `AdminHandlers::retention` | `service.set_retention` |
+| GET | `/admin/status` | admin | `AdminHandlers::status` | `service.admin_list`, `list_outgoing`, `sessions.sessions` |
+| GET | `/admin/sessions` | admin | `AdminHandlers::sessions` | `sessions.sessions` |
+| DELETE | `/admin/sessions/{user}` | admin | `AdminHandlers::revoke_user` | `sessions.revoke_user` |
+| GET | `/admin/log` | admin | `AdminHandlers::log` | `logging::read_business_log` |
+
+The `/admin/*` routes ([api/admin_handlers.cpp](src/lib/api/admin_handlers.cpp))
+are registered by `main` only when `auth.admin_group` is set.
 
 `{name}` matches one path segment, `{name*}` matches the rest including `/`.
 
@@ -310,6 +323,12 @@ the server accepts before the handler runs:
 | `user` | `Basic base64(user:pass)` **or** `Bearer ftu_<token>` |
 | `password` | `Basic` only (a token must not buy a new token) |
 | `peer` | `Bearer <peer accept_token>`; user tokens are refused |
+| `admin` | `Basic` **or** `Bearer fta_<admin token>`, then `is_member(user, auth.admin_group)` on every request; not a member = 403 |
+| `admin_password` | `Basic` only, same membership check (POST /admin/token) |
+
+User (`ftu_`) and admin (`fta_`) tokens live in one `SessionStore` with a
+`Scope`; `verify` only accepts a token of the scope the route asks for, so an
+admin token opens no user route and a user token no admin route.
 
 ---
 
@@ -845,8 +864,11 @@ main: signal_io.run() returns -> server.wait() joins all threads
   `invalid user name or password`.
 - **Business log** (`business.log`, `logging::BusinessLog::record(BizEvent)`):
   one event per business action: `tx_created`, `file_added`, `file_removed`,
-  `committed`, `received`, `downloaded`, `expired` (retention sweep), and
-  `forwarded` once the peer confirmed a push (`mark_delivered()`).
+  `committed`, `received`, `downloaded`, `expired` (retention sweep),
+  `forwarded` once the peer confirmed a push (`mark_delivered()`), and the
+  admin actions `admin_deleted`, `retention_changed` (`days`) and
+  `sessions_revoked` (`user`, no `tx`). `GET /admin/log` reads it back with
+  `logging::read_business_log()`.
 - The retention sweep also writes to the technical log (tag `retention`):
   start/stop, a summary line when a sweep removed something, and a warning
   per failed `expire()`.
@@ -858,14 +880,21 @@ main: signal_io.run() returns -> server.wait() joins all threads
 
 ## 10. Client (`ftc`)
 
-[app/cli/main.cpp](src/app/cli/main.cpp),
-[token_cache.cpp](src/app/cli/token_cache.cpp), and the HTTP client
-[net/http_client.cpp](src/lib/net/http_client.cpp), which the server's
-forwarder uses too. A separate executable; it shares only `common` and `net`
-with the server.
+[app/cli/](src/app/cli/): [main.cpp](src/app/cli/main.cpp) (global options),
+[dispatch.cpp](src/app/cli/dispatch.cpp) (command lookup and argument
+parsing), [session.cpp](src/app/cli/session.cpp) (connect, login),
+[password.cpp](src/app/cli/password.cpp),
+[token_cache.cpp](src/app/cli/token_cache.cpp),
+[reply.cpp](src/app/cli/reply.cpp) (JSON replies),
+[local_files.cpp](src/app/cli/local_files.cpp) (collecting and hashing files),
+[outgoing.cpp](src/app/cli/outgoing.cpp) (create, upload, commit; shared by
+`send` and the step-by-step commands) and one file per command group under [commands/](src/app/cli/commands/); plus
+the HTTP client [net/http_client.cpp](src/lib/net/http_client.cpp), which the
+server's forwarder uses too. A separate executable; it shares only `common`
+and `net` with the server.
 
 ```
-main -> cmd_<command>(global, vm)
+main -> run_command() -> Command::run(global, vm)   // kSend, kGet, ...
 └── connect(global)                                // every command except login/logout
     ├── open_session(global)
     │   ├── --server / --user (or FTC_SERVER / FTC_USER) required
@@ -888,6 +917,11 @@ HttpClient::<request>
       attempt(); on `auth` (401) and relogin set -> new token, attempt() once more
 ```
 
+- `ftc send` = `create_transaction` + `upload_files` + `commit_transaction`
+  (outgoing.cpp). `ftc create` / `add` / `commit` run one of them each;
+  `ftc rm` is `DELETE /transactions/{id}/files/{path}`. Files are collected
+  (`collect_files`) and IDs/paths parsed before `connect()`, so bad input
+  fails without a password prompt.
 - `ftc login`: always asks for the password and replaces the cached token.
 - `ftc logout`: `DELETE /auth/token` with the cached token, then deletes the
   file even if the server could not be told (warns unless the server said

@@ -8,7 +8,7 @@
 : "${BIN:?BIN must be the bin folder of a build}"
 : "${WORK:?WORK must be set}"
 
-declare -A SITE_PORT SITE_PID
+declare -A SITE_PORT SITE_PID SITE_ADMINS
 
 log() { printf '[%s] %s\n' "$(date +%T)" "$*" >&2; }
 die() { log "FAIL: $*"; exit 1; }
@@ -54,10 +54,15 @@ site_init() {
 
 # site_config NAME [PEER...] : writes server.toml. Every pair of sites shares
 # two tokens, one per direction (fixed per pair, so both configs agree; at
-# least 32 characters, as the config requires).
+# least 32 characters, as the config requires). With SITE_ADMINS[NAME] set
+# to "user,user", those users form the group "admins", the admin group.
 site_config() {
-  local name=$1
+  local name=$1 admin_lines=""
   shift
+  if [[ -n ${SITE_ADMINS[$name]:-} ]]; then
+    printf 'admins:%s\n' "${SITE_ADMINS[$name]}" >"$WORK/$name/groups"
+    admin_lines=$'groups_file = "groups"\nadmin_group = "admins"'
+  fi
   cat >"$WORK/$name/server.toml" <<EOF
 instance_name = "$name"
 
@@ -76,6 +81,7 @@ ca = "$WORK/cert.pem"
 
 [auth]
 users_file = "users"
+$admin_lines
 
 [log]
 level = "debug"
@@ -143,7 +149,7 @@ ftc_as() {
     --ca-file "$WORK/cert.pem" "$@"
 }
 
-# The transaction id from `ftc send` output ("created <id> for ...").
+# The transaction id from `ftc send` / `ftc create` output ("created <id> for ...").
 sent_id() { awk '/^created / { print $2; exit }'; }
 
 # One field of `ftc show`.

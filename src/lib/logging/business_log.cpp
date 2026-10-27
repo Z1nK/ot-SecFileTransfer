@@ -54,6 +54,12 @@ std::string_view to_string(BizEventType type) {
     return "downloaded";
   case BizEventType::expired:
     return "expired";
+  case BizEventType::admin_deleted:
+    return "admin_deleted";
+  case BizEventType::retention_changed:
+    return "retention_changed";
+  case BizEventType::sessions_revoked:
+    return "sessions_revoked";
   }
   return "unknown";
 }
@@ -64,7 +70,11 @@ BusinessLog::BusinessLog(std::unique_ptr<ILogSink> sink, const common::IClock& c
 std::string BusinessLog::format(const BizEvent& e, common::Timestamp ts) {
   // Fixed field order, so lines are easy to read and diff.
   JsonLine line;
+  if (e.tx) {
+    line.str("tx", e.tx->str());
+  }
   line.str("actor", e.actor);
+  line.str("user", e.subject);
   line.str("from", e.from_user);
   line.str("to", e.to_user);
   line.str("server", e.to_server);
@@ -73,9 +83,9 @@ std::string BusinessLog::format(const BizEvent& e, common::Timestamp ts) {
   line.opt("sha256", e.sha256);
   line.num("files", e.file_count);
   line.num("bytes", e.total_bytes);
-  return std::move(line).finish(std::format(R"({{"v":{},"ts":"{}","event":"{}","tx":"{}")",
-                                            kSchemaVersion, common::format_iso8601(ts),
-                                            to_string(e.type), e.tx.str()));
+  line.num("days", e.retention_days);
+  return std::move(line).finish(std::format(R"({{"v":{},"ts":"{}","event":"{}")", kSchemaVersion,
+                                            common::format_iso8601(ts), to_string(e.type)));
 }
 
 void BusinessLog::record(const BizEvent& event) {

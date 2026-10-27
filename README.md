@@ -10,7 +10,8 @@ nothing in it can change, and the target user can download the files.
 - Path traversal (`../`, absolute paths) is rejected
 - Two logs: `business.log` (who sent what to whom, JSON lines) and `technical.log`
 
-See [Requirements.md](Requirements.md) and [Architecture.md](Architecture.md) for the design.
+See [Requirements.md](Requirements.md) and [Architecture.md](Architecture.md) for the design,
+and [dev_info.md](dev_info.md) for how to add features.
 
 ### Status
 
@@ -62,7 +63,8 @@ Both presets use the same directory `build/`. Binaries go to `build/bin/`:
 | `*_tests` | unit tests (one per module) |
 | `example-*` | small examples, not needed to run the server |
 
-To build without tests, add `-DWITH_GOOGLE_TEST=OFF` to the configure command.
+To build without tests, add `-DWITH_GOOGLE_TEST=OFF` to the configure command; without the
+examples, `-DWITH_EXAMPLES=OFF`.
 
 LDAP login (`auth.provider = "ldap"`, see [server.example.toml](config/server.example.toml)) is
 optional: add `-DWITH_LDAP=ON` and install OpenLDAP (`sudo apt install libldap-dev`). A test
@@ -188,6 +190,9 @@ Everything else has a default. Unknown keys give a warning in the technical log.
 | `[[user]]` `name`, `password_hash` | — | one block per local user, in addition to `users_file` |
 | `auth.groups_file` | — | file with one `name:member,member,...` per line (see [Groups file](#groups-file)) |
 | `[[group]]` `name`, `members` | — | one block per group, in addition to `groups_file` |
+| `auth.token_ttl_s`, `auth.token_idle_s` | `3600`, `900` | user token lifetime from login, and how long it may go unused |
+| `auth.admin_group` | — | members may use the admin API (see [Administration](#administration)); unset = no admin API |
+| `auth.admin_token_ttl_s`, `auth.admin_token_idle_s` | user values | the same for admin tokens, e.g. shorter |
 | `log.level` | `info` | `trace`, `debug`, `info`, `warn`, `error` |
 | `log.dir` | `<storage.root>/logs` | folder for `technical.log` and `business.log` |
 | `log.rotate_bytes` | `67108864` | rotate a log at this size, `0` = never |
@@ -201,8 +206,8 @@ Everything else has a default. Unknown keys give a warning in the technical log.
 Peer tokens are shared secrets you make yourself, two per pair of servers (one per
 direction), e.g. with `openssl rand -hex 32`. siteA's `token` for siteB is siteB's
 `accept_token` for siteA, and the other way round. The config refuses a token shorter
-than 32 characters, one with spaces or control characters, one starting with `ftu_`
-(the prefix of user tokens), and any secret used twice, in the same block or across
+than 32 characters, one with spaces or control characters, one starting with `ftu_` or
+`fta_` (the prefixes of user and admin tokens), and any secret used twice, in the same block or across
 peers: the `accept_token` alone tells the server which peer is calling. The server
 keeps only their SHA-256 in memory and compares in constant time.
 
@@ -296,7 +301,7 @@ User requests carry either HTTP Basic auth (`curl -u user:password`) or a user t
 |-------------|------------|------|
 | 400 | `validation` | bad JSON, bad id, bad path (`..`, absolute) |
 | 401 | `auth` | wrong or missing credentials |
-| 403 | `forbidden` | not your transaction |
+| 403 | `forbidden` | not your transaction; admin route called by a user who is not in `auth.admin_group` |
 | 404 | `notfound` | no such transaction or file |
 | 409 | `conflict` | change to a committed transaction |
 | 422 | `integrity` / `unknown_destination` | checksum mismatch / unknown target user or server |
@@ -385,14 +390,91 @@ build/bin/ftc --allow-http -u bob files $ID
 build/bin/ftc --allow-http -u bob get $ID downloads
 ```
 
+The same transaction can be built step by step instead of with `send`; it stays `open`
+(listed in `ftc outbox`, not yet visible to the receiver) until `commit`:
+
+```bash
+build/bin/ftc --allow-http -u alice create --to bob --comment "Q3 reports"
+# created b3c18f72-... for bob
+ID=b3c18f72-...
+build/bin/ftc --allow-http -u alice add $ID report/      # uploads report/a.txt, report/b.txt
+build/bin/ftc --allow-http -u alice add $ID notes.txt    # uploads notes.txt
+build/bin/ftc --allow-http -u alice rm $ID report/b.txt  # path as in 'ftc files', not a local path
+build/bin/ftc --allow-http -u alice files $ID
+build/bin/ftc --allow-http -u alice commit $ID
+# committed b3c18f72-... (2 files, 1234 bytes)
+```
+
 Notes:
 
 - `--to bob@siteB` sends to a user on another server, `--retention DAYS` sets `retention_days`.
 - `--comment "Q3 reports"` (`-m`) attaches a short note, shown in the COMMENT column of `inbox`/`outbox`.
 - `ftc outbox` lists the transactions you sent.
 - `get` does not overwrite existing files unless you add `--force`.
-- If an upload fails, `send` prints the id of the transaction it left `open`.
+- If an upload fails, `send` prints the id of the transaction it left `open`; finish it with
+  `add` and `commit`.
+- `add` replaces a file already in the transaction under the same path. `add` and `rm` only
+  work while the transaction is `open`; after `commit` they fail with `conflict`.
 - With TLS, use an `https://` URL and `--ca-file cert.pem` (or `FTC_CA_FILE`) for a self-signed certificate.
+
+### Administration
+
+Set `auth.admin_group` to a group: its members are the admins of this server. With
+`provider = "local"` it must be a group of the groups file or a `[[group]]` block; with
+LDAP it is a group in `group_base_dn`, so anyone who can change that group in the
+directory can make admins here. Without `admin_group` the `/admin/...` routes don't
+exist (404).
+
+```toml
+[auth]
+groups_file = "groups"     # holds e.g.  admins:root
+admin_group = "admins"
+admin_token_ttl_s = 900    # optional; admin tokens default to the user token times
+```
+
+Admins see the metadata of every transaction (sender, target, state, sizes, file names
+and checksums) but never file contents. Changes are written to the business log with
+the admin as `actor`. The admin group is not a recipient: `ftc send --to admins` is
+refused.
+
+The admin API has its own token, from `POST /admin/token` (`fta_...`). It is accepted on
+`/admin/...` only, and user tokens are not accepted there, so `ftc login` alone never
+gives admin rights. Group membership is checked on every request: someone removed from
+the group loses admin rights at once (with LDAP, after `ldap.cache_ttl_s`), even with
+a valid admin token.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `POST` | `/admin/token` | admin log in, Basic auth only; same answer as `/auth/token` |
+| `DELETE` | `/admin/token` | admin log out |
+| `GET` | `/admin/transactions?user=&state=&from=&to=` | all transactions; `user` matches sender or target, `from`/`to` (ISO 8601) bound the creation time |
+| `GET` | `/admin/transactions/{id}` | one transaction with its file list |
+| `DELETE` | `/admin/transactions/{id}` | delete it with its files, in any state |
+| `PUT` | `/admin/transactions/{id}/retention` | body `{"days": N}`: expires N days after creation (1..`retention.max_days`) |
+| `GET` | `/admin/status` | version, uptime, peers, transactions per state, forward queue, sessions |
+| `GET` | `/admin/sessions` | live sessions: user, scope (`user`/`admin`), login, last use, expiry |
+| `DELETE` | `/admin/sessions/{user}` | end every session of a user |
+| `GET` | `/admin/log?from=&to=&limit=` | business log lines with `from <= ts < to` (no `to`: up to now, inclusive), oldest first, at most `limit` (default 1000, max 10000), as `application/x-ndjson` |
+
+The same with ftc:
+
+```sh
+ftc -u root admin login                      # asks root's password, saves the admin token
+ftc -u root admin status
+ftc -u root admin list --who bob --state committed --from 7d
+ftc -u root admin show ID
+ftc -u root admin retention ID 60
+ftc -u root admin delete ID                  # asks first; --yes in scripts
+ftc -u root admin sessions
+ftc -u root admin kick bob                   # bob must log in again
+ftc -u root admin log --from 2026-10-01 --to 2026-10-02
+ftc -u root admin log --from 2h --limit 50
+ftc -u root admin logout
+```
+
+Times are `YYYY-MM-DD`, `YYYY-MM-DDTHH:MM:SSZ` (UTC), `now`, or an age such as `30m`,
+`2h`, `7d`, `1w`. The log query reads `business.log` and the one rotated file
+`business.log.1`; older lines are gone once the log has rotated twice.
 
 ## 5. Check
 
@@ -414,6 +496,20 @@ destination checks, and a transfer that waits while siteB is down. It needs
 
 ```bash
 tests/integration/two_sites.sh build/bin
+```
+
+[tests/integration/ldap_admin.sh](tests/integration/ldap_admin.sh) tests the admin
+interface with LDAP users against the directory of `docker/docker-compose.yml`: admin
+rights from the LDAP group `admins`, refusals for other users, and group changes in
+LDAP taking effect on running sessions (through `docker exec` into the container,
+`LDAP_CONTAINER`, default `ldap-test`; skipped without docker access). It puts the
+group back as the seed has it, also after a failure. Without `CONFIDE_LDAP_TEST_URI`
+it is reported as skipped:
+
+```bash
+docker compose -f docker/docker-compose.yml up -d
+CONFIDE_LDAP_TEST_URI=ldap://localhost:1389 ctest --preset x64-debug-linux -L ldap
+CONFIDE_LDAP_TEST_URI=ldap://localhost:1389 tests/integration/ldap_admin.sh build/bin
 ```
 
 ### Benchmark and memory
