@@ -410,6 +410,11 @@ std::vector<common::TransactionId> TransactionService::list_expired() const {
 }
 
 Result<void> TransactionService::expire(const common::TransactionId& id) {
+  return destroy(id, BizEventType::expired, Caller{.name = "system", .is_peer = false});
+}
+
+Result<void> TransactionService::destroy(const common::TransactionId& id, BizEventType type,
+                                         const Caller& actor) {
   {
     const auto mu = lock_for(id);
     const std::scoped_lock lock(*mu);
@@ -426,7 +431,7 @@ Result<void> TransactionService::expire(const common::TransactionId& id) {
     }
     CFD_TRYV(repo_.remove(id));
 
-    blog_.record(event_for(BizEventType::expired, *tx, Caller{.name = "system", .is_peer = false}));
+    blog_.record(event_for(type, *tx, actor));
   }
 
   const std::scoped_lock lock(locks_mu_);

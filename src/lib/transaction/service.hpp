@@ -192,6 +192,11 @@ private:
   // Mutex of one transaction, created on first use.
   std::shared_ptr<std::mutex> lock_for(const common::TransactionId& id);
 
+  // Marks the transaction expired, deletes it with its files and logs
+  // `type` with `actor`. Shared by expire() and admin_delete().
+  Result<void> destroy(const common::TransactionId& id, logging::BizEventType type,
+                       const Caller& actor);
+
   TransactionRepository& repo_;
   storage::FileStore& store_;
   logging::BusinessLog& blog_;

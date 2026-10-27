@@ -845,8 +845,11 @@ main: signal_io.run() returns -> server.wait() joins all threads
   `invalid user name or password`.
 - **Business log** (`business.log`, `logging::BusinessLog::record(BizEvent)`):
   one event per business action: `tx_created`, `file_added`, `file_removed`,
-  `committed`, `received`, `downloaded`, `expired` (retention sweep), and
-  `forwarded` once the peer confirmed a push (`mark_delivered()`).
+  `committed`, `received`, `downloaded`, `expired` (retention sweep),
+  `forwarded` once the peer confirmed a push (`mark_delivered()`), and the
+  admin actions `admin_deleted`, `retention_changed` (`days`) and
+  `sessions_revoked` (`user`, no `tx`). `GET /admin/log` reads it back with
+  `logging::read_business_log()`.
 - The retention sweep also writes to the technical log (tag `retention`):
   start/stop, a summary line when a sweep removed something, and a warning
   per failed `expire()`.
