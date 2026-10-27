@@ -1,5 +1,6 @@
 #include "common/time.hpp"
 
+#include <charconv>
 #include <cstddef>
 #include <format>
 
@@ -59,6 +60,46 @@ Result<Timestamp> parse_iso8601(std::string_view text) {
   }
   return std::chrono::sys_days{date} + std::chrono::hours{hour} + std::chrono::minutes{minute} +
          std::chrono::seconds{second};
+}
+
+Result<Timestamp> parse_time_arg(std::string_view text, Timestamp now) {
+  using namespace std::chrono;
+  if (text == "now") {
+    return now;
+  }
+  if (text.size() == 10) {
+    if (auto day = parse_iso8601(std::string{text} + "T00:00:00Z")) {
+      return day;
+    }
+  }
+  if (text.size() > 1 && text.size() <= 8) {
+    std::int64_t n = 0;
+    const auto* end = text.data() + text.size() - 1;
+    const auto [ptr, ec] = std::from_chars(text.data(), end, n);
+    if (ec == std::errc{} && ptr == end && n >= 0) {
+      switch (text.back()) {
+      case 's':
+        return now - seconds{n};
+      case 'm':
+        return now - minutes{n};
+      case 'h':
+        return now - hours{n};
+      case 'd':
+        return now - days{n};
+      case 'w':
+        return now - weeks{n};
+      default:
+        break;
+      }
+    }
+  }
+  auto exact = parse_iso8601(text);
+  if (!exact) {
+    return std::unexpected(Error::make(
+        ErrCode::validation,
+        std::format("'{}': expected YYYY-MM-DD[THH:MM:SSZ], now, or an age like 2h, 7d", text)));
+  }
+  return exact;
 }
 
 Result<Timestamp> expires_at(Timestamp created, int retention_days) {

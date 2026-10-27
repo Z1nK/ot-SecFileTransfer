@@ -72,14 +72,14 @@ Result<T> HttpClient::with_relogin(Fn&& attempt) {
   return attempt();
 }
 
-Result<Login> HttpClient::login(const Credentials& creds) {
+Result<Login> HttpClient::login(const Credentials& creds, std::string_view target) {
   std::string pair = creds.user + ":" + creds.password;
   std::string basic = "Basic "
                       + common::base64_encode(common::ByteSpan{
                           reinterpret_cast<const std::byte*>(pair.data()),  // NOLINT
                           pair.size()});
   auto reply = impl_->exchange<std::string>([&](auto& stream) {
-    auto req = impl_->make_request<http::empty_body>(http::verb::post, "/auth/token");
+    auto req = impl_->make_request<http::empty_body>(http::verb::post, target);
     req.set(http::field::authorization, basic);
     req.prepare_payload();
     return impl_->roundtrip(stream, req);
@@ -106,10 +106,10 @@ Result<Login> HttpClient::login(const Credentials& creds) {
   return out;
 }
 
-Result<void> HttpClient::logout() {
+Result<void> HttpClient::logout(std::string_view target) {
   return impl_
       ->exchange<std::string>([&](auto& stream) {
-        auto req = impl_->make_request<http::empty_body>(http::verb::delete_, "/auth/token");
+        auto req = impl_->make_request<http::empty_body>(http::verb::delete_, target);
         req.prepare_payload();
         return impl_->roundtrip(stream, req);
       })

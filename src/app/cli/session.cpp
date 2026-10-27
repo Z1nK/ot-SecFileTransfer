@@ -9,9 +9,14 @@
 
 namespace confide::cli {
 
-Result<net::Login> login(HttpClient& client, const std::string& user, const TokenCache& cache) {
+std::string_view token_target(Scope scope) {
+  return scope == Scope::admin ? HttpClient::kAdminTokenTarget : HttpClient::kUserTokenTarget;
+}
+
+Result<net::Login> login(HttpClient& client, const std::string& user, const TokenCache& cache,
+                         Scope scope) {
   CFD_TRY(password, read_password(user));
-  auto reply = client.login({.user = user, .password = password});
+  auto reply = client.login({.user = user, .password = password}, token_target(scope));
   OPENSSL_cleanse(password.data(), password.size());
   if (!reply) {
     return std::unexpected(std::move(reply).error());
@@ -20,7 +25,7 @@ Result<net::Login> login(HttpClient& client, const std::string& user, const Toke
   return reply;
 }
 
-Result<Session> open_session(const Global& global) {
+Result<Session> open_session(const Global& global, Scope scope) {
   if (global.server.empty()) {
     return fail(ErrCode::validation, "no server: use --server or FTC_SERVER");
   }
@@ -38,24 +43,25 @@ Result<Session> open_session(const Global& global) {
     }
     std::cerr << "ftc: warning: plain http, the password and token are sent unencrypted\n";
   }
-  CFD_TRY(cache, TokenCache::for_server(url, global.user));
+  CFD_TRY(cache, TokenCache::for_server(url, global.user, scope == Scope::admin));
   CFD_TRY(client, HttpClient::create(std::move(url), {.ca_file = global.ca_file, .user_agent = "ftc"}));
-  return Session{.client = std::move(client), .cache = std::move(cache)};
+  return Session{.client = std::move(client), .cache = std::move(cache), .scope = scope};
 }
 
-Result<HttpClient> connect(const Global& global) {
-  CFD_TRY(session, open_session(global));
-  auto& [client, cache] = session;
+Result<HttpClient> connect(const Global& global, Scope scope) {
+  CFD_TRY(session, open_session(global, scope));
+  auto& client = session.client;
+  const auto& cache = session.cache;
   CFD_TRY(saved, cache.load());
   if (saved) {
     client.set_token(*saved);
   } else {
-    CFD_TRYV(login(client, global.user, cache));
+    CFD_TRYV(login(client, global.user, cache, scope));
   }
   if (can_ask_password()) {
-    client.on_expired([user = global.user, cache](HttpClient& c) -> Result<std::string> {
+    client.on_expired([user = global.user, cache, scope](HttpClient& c) -> Result<std::string> {
       std::cerr << "ftc: session expired, log in again\n";
-      CFD_TRY(reply, login(c, user, cache));
+      CFD_TRY(reply, login(c, user, cache, scope));
       return reply.token;
     });
   }

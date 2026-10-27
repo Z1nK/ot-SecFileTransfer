@@ -8,6 +8,7 @@
 
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace confide::cli {
 
@@ -50,5 +51,15 @@ extern const Command kFiles;
 
 // commands/get.cpp
 extern const Command kGet;
+
+// commands/admin.cpp: `ftc admin COMMAND ...`, with its own command table.
+// `args` are the words after "admin". Returns the exit code.
+int run_admin(const std::vector<std::string>& args, const Global& global);
+
+// dispatch.cpp: parses `args` with the options of `cmd` and runs it.
+// `label` names it in messages ("ftc send", "ftc admin list"), `login_hint`
+// is the command that logs in again. Returns the exit code.
+int run_parsed(const Command& cmd, const std::string& label, std::string_view login_hint,
+               const std::vector<std::string>& args, const Global& global);
 
 }  // namespace confide::cli

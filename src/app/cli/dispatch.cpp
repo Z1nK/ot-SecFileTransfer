@@ -35,6 +35,8 @@ constexpr std::string_view kCommands = R"(Commands:
   get ID [DIR] [--force]
                         download all files of a transaction into DIR
                         (default: current folder)
+  admin COMMAND ...     server administration, for members of the admin
+                        group; run 'ftc admin' for its commands
 
 Run 'ftc COMMAND --help' for the options of a command.
 )";
@@ -74,18 +76,25 @@ void usage(const po::options_description& global) {
 
 int run_command(const std::string& command, const std::vector<std::string>& args,
                 const Global& global) {
+  if (command == "admin") {
+    return run_admin(args, global);
+  }
   const Command* cmd = find(command);
   if (cmd == nullptr) {
     std::cerr << "ftc: unknown command '" << command << "'\n\n" << kCommands;
     return kExitUsage;
   }
+  return run_parsed(*cmd, "ftc " + command, "ftc login", args, global);
+}
 
-  po::options_description desc(std::format("usage: ftc {}{}\n\nOptions", command, cmd->synopsis));
+int run_parsed(const Command& cmd, const std::string& label, std::string_view login_hint,
+               const std::vector<std::string>& args, const Global& global) {
+  po::options_description desc(std::format("usage: {}{}\n\nOptions", label, cmd.synopsis));
   desc.add_options()("help,h", "show this help");
   po::options_description hidden;
   po::positional_options_description pos;
-  if (cmd->options != nullptr) {
-    cmd->options(desc, hidden, pos);
+  if (cmd.options != nullptr) {
+    cmd.options(desc, hidden, pos);
   }
 
   po::options_description all;
@@ -99,14 +108,14 @@ int run_command(const std::string& command, const std::vector<std::string>& args
     }
     vm = parse_command(args, all, pos);
   } catch (const po::error& e) {
-    std::cerr << "ftc " << command << ": " << e.what() << "\n\n" << desc;
+    std::cerr << label << ": " << e.what() << "\n\n" << desc;
     return kExitUsage;
   }
 
-  if (auto res = cmd->run(global, vm); !res) {
-    std::cerr << "ftc " << command << ": " << describe(res.error()) << '\n';
-    if (res.error().code == ErrCode::auth && cmd != &kLogin && !can_ask_password()) {
-      std::cerr << "ftc: the session may have expired; run 'ftc login'\n";
+  if (auto res = cmd.run(global, vm); !res) {
+    std::cerr << label << ": " << describe(res.error()) << '\n';
+    if (res.error().code == ErrCode::auth && cmd.name != "login" && !can_ask_password()) {
+      std::cerr << "ftc: the session may have expired; run '" << login_hint << "'\n";
     }
     return kExitFailed;
   }

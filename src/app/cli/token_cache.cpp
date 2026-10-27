@@ -85,7 +85,7 @@ Result<void> check_private(const struct stat& st, const fs::path& p, std::string
 
 }  // namespace
 
-Result<TokenCache> TokenCache::for_server(const ServerUrl& url, std::string_view user) {
+Result<TokenCache> TokenCache::for_server(const ServerUrl& url, std::string_view user, bool admin) {
   fs::path state;
   if (const char* xdg = std::getenv("XDG_STATE_HOME");  // NOLINT(concurrency-mt-unsafe)
       xdg != nullptr && *xdg == '/') {
@@ -97,7 +97,8 @@ Result<TokenCache> TokenCache::for_server(const ServerUrl& url, std::string_view
     return fail(ErrCode::validation, "can't find a place for the token: set HOME");
   }
   return TokenCache(state / "ftc" / "tokens"
-                    / std::format("{}@{}_{}", file_part(user), file_part(url.host), url.port));
+                    / std::format("{}@{}_{}{}", file_part(user), file_part(url.host), url.port,
+                                  admin ? ".admin" : ""));
 }
 
 Result<void> TokenCache::prepare_dir() const {

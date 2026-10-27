@@ -10,6 +10,7 @@ target_sources(${LOCAL_EXE_NAME} PRIVATE
   reply.cpp
   session.cpp
   token_cache.cpp
+  commands/admin.cpp
   commands/auth.cpp
   commands/compose.cpp
   commands/get.cpp
