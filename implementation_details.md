@@ -342,7 +342,8 @@ admin token opens no user route and a user token no admin route.
 HttpServer::start()
 ├── make_address(bind), else resolve the host name (first address), acceptor.open/set_option/bind/listen
 ├── co_spawn(acceptor strand, Impl::accept_loop())
-└── N threads, each running ioc.run()        // N = rest.threads or hardware_concurrency
+├── N threads, each running ioc.run()        // N = rest.threads or hardware_concurrency
+└── asio::thread_pool blocking(M)            // M = rest.blocking_threads or max(2 * cores, 4)
 
 Impl::accept_loop()                           // coroutine, runs forever
 └── loop: co_await acceptor.async_accept(make_strand(ioc))
@@ -354,8 +355,18 @@ There is one `io_context` shared by all threads. Each connection has its own
 different connections run in parallel.
 
 All handler code runs on those threads. Service and storage calls are
-**synchronous** (blocking file I/O inside a coroutine). Only network reads and
-writes are `co_await`ed.
+**synchronous**, so the calls that can block for long are moved to the
+`blocking` pool with `co_await offload(pool, fn)` ([api/blocking.hpp](src/lib/api/blocking.hpp)):
+authentication (may call LDAP), `begin_upload`, each upload chunk write,
+`finish` (fsync + rename), `open_download` and each download chunk read. The
+coroutine stays suspended meanwhile and resumes on its own strand, so the
+network threads keep accepting and serving other connections while a disk or
+the directory server is slow. Handlers get the pool as `ctx.blocking`.
+Short calls (create, list, commit) still run inline.
+
+`offload()` must never be awaited with a lock held. A full pool delays only
+the requests waiting for it (including their authentication), not the
+network threads. `server.wait()` joins the pool after the network threads.
 
 ### 4.2 Per connection
 
@@ -400,7 +411,7 @@ Impl::dispatch(ex)
 ├── on error: ex.send(Response::error(...)), return
 │
 ├── source = ex.remote_address()             // client IP, for the LoginLimiter
-├── switch route.access:
+├── switch route.access:                     // all inside offload(blocking, ...)
 │     peer     -> auth.authenticate_peer(req)
 │     password -> auth.authenticate_password(req, source)
 │     user     -> auth.authenticate_user(req, source)
@@ -484,7 +495,7 @@ Handlers never see the socket. They use `api::Exchange`
 | `read_body(buf)` | sends `100 Continue` if the client asked (`send_continue()`), then `co_await http::async_read(stream, buffer, parser)` with the parser's body pointed at `buf`. Returns bytes read, 0 at end of body. Body is never fully in memory. |
 | `read_body_string(max)` | loops `read_body()` into a `std::string` (for JSON bodies), rejects > max |
 | `send(Response)` | `write_response()`: builds `http::response<string_body>`, sets `Server`, `Content-Type`, keep-alive, `co_await http::async_write` |
-| `send_file(Download&, sha256)` | writes header (`application/octet-stream`, `Content-Length`, `X-Checksum-SHA256`) with `async_write_header`, then loops `file.read(1 MiB)` → `async_write` chunk |
+| `send_file(Download&, sha256)` | writes header (`application/octet-stream`, `Content-Length`, `X-Checksum-SHA256`) with `async_write_header`, then loops `file.read(1 MiB)` (offloaded) → `async_write` chunk |
 | `responded()` | true once `send` / `send_file` started |
 
 Keep-alive is kept only if the client wants it **and** the body was fully
@@ -576,7 +587,7 @@ TransactionHandlers::upload(ctx)
 ├── id_param(ctx)    -> TransactionId::parse(params["id"])
 ├── path_param(ctx)  -> RelativePath::parse(params["path"])     // rejects "..", absolute, etc.
 ├── optional header X-Checksum-SHA256 -> Sha256Digest::from_hex()
-├── service_.begin_upload(caller, id, path)
+├── offload: service_.begin_upload(caller, id, path)
 │   ├── lock(id)
 │   ├── repo_.find(id)                 -> 404
 │   ├── may_write(caller, tx)          -> 403 (sent as 404)
@@ -590,10 +601,10 @@ TransactionHandlers::upload(ctx)
 ├── loop:                                               // 1 MiB buffer
 │   ├── n = co_await ctx.exchange.read_body(buf)        // network -> buf
 │   ├── n == 0 -> break
-│   └── pending->write(buf[0..n])
+│   └── offload: pending->write(buf[0..n])
 │         Upload::write(): fwrite to temp file + hasher.update()
 │
-├── pending->finish(expected)
+├── offload: pending->finish(expected)
 │   ├── lock(id) again
 │   ├── repo_.find(id), require_mutable(state)          // committed meanwhile? -> 409
 │   ├── upload_.commit(expected)
@@ -679,7 +690,7 @@ TransactionHandlers::get / list_files(ctx)
 ```
 TransactionHandlers::download(ctx)
 ├── id_param, path_param
-├── service_.open_download(caller, id, path)
+├── offload: service_.open_download(caller, id, path)
 │   ├── repo_.find; may_read
 │   ├── require_readable(state)       // open -> 409, expired -> 410
 │   ├── tx.find_file(path)            -> 404
@@ -689,7 +700,7 @@ TransactionHandlers::download(ctx)
 ├── tx.find_file(path)
 ├── co_await ctx.exchange.send_file(file, entry.sha256)
 │     header: 200, octet-stream, Content-Length, X-Checksum-SHA256
-│     loop: file.read(1 MiB) -> async_write chunk
+│     loop: offload: file.read(1 MiB) -> async_write chunk
 │     on error after the header went out: close the connection (no error response possible)
 └── blog_.record(downloaded)          // only after a complete send
 ```

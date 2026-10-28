@@ -50,10 +50,11 @@ Result<void> Parser::parse_rest(RestCfg& out) {
   if (tbl == nullptr) {
     return {};
   }
-  warn_unknown(*tbl, "rest.", {"bind", "port", "threads", "request_timeout_ms"});
+  warn_unknown(*tbl, "rest.", {"bind", "port", "threads", "blocking_threads", "request_timeout_ms"});
   CFD_TRYV(get(*tbl, "bind", "rest", out.bind));
   CFD_TRYV(get(*tbl, "port", "rest", out.port));
   CFD_TRYV(get(*tbl, "threads", "rest", out.threads));
+  CFD_TRYV(get(*tbl, "blocking_threads", "rest", out.blocking_threads));
   CFD_TRYV(get(*tbl, "request_timeout_ms", "rest", out.request_timeout_ms));
   if (out.bind.empty()) {
     return invalid("rest.bind must not be empty");
@@ -63,6 +64,9 @@ Result<void> Parser::parse_rest(RestCfg& out) {
   }
   if (out.threads > 1024) {
     return invalid("rest.threads must be <= 1024 (0 = number of cores)");
+  }
+  if (out.blocking_threads > 1024) {
+    return invalid("rest.blocking_threads must be <= 1024 (0 = automatic)");
   }
   if (out.request_timeout_ms == 0) {
     return invalid("rest.request_timeout_ms must be > 0");

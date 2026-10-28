@@ -1,3 +1,4 @@
+#include "api/blocking.hpp"
 #include "api/server/io.hpp"
 #include "api/server/server_impl.hpp"
 
@@ -26,7 +27,9 @@ asio::awaitable<void> HttpServer::Impl::dispatch(Exchange& ex, const std::string
   }
 
   const Route& route = *match->route;
-  auto caller = [&] {
+  // Password checks may go to LDAP: keep them off the network threads.
+  const asio::any_io_executor pool = blocking->get_executor();
+  auto caller = co_await offload(pool, [&] {
     switch (route.access) {
     case Access::peer:
       return auth.authenticate_peer(req);
@@ -40,7 +43,7 @@ asio::awaitable<void> HttpServer::Impl::dispatch(Exchange& ex, const std::string
       break;
     }
     return auth.authenticate_user(req, source);
-  }();
+  });
   if (!caller) {
     if (caller.error().code == ErrCode::throttled || caller.error().code == ErrCode::forbidden) {
       tlog.warn(kTag, "{} {} from {}: {}", sv(req.method_string()), sv(req.target()), source,
@@ -61,6 +64,7 @@ asio::awaitable<void> HttpServer::Impl::dispatch(Exchange& ex, const std::string
       .caller = std::move(*caller),
       .params = std::move(match->params),
       .query = std::move(match->query),
+      .blocking = pool,
   };
 
   std::string what;

@@ -118,7 +118,7 @@ asio::awaitable<void> HttpServer::Impl::serve_requests(Stream& stream) {
       co_return;
     }
 
-    detail::SessionExchange<Stream> ex{stream, buffer, parser, options};
+    detail::SessionExchange<Stream> ex{stream, buffer, parser, options, blocking->get_executor()};
     co_await dispatch(ex, ex.remote_address());
     if (ex.must_close()) {
       co_return;

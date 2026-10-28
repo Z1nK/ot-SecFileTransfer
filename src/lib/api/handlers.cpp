@@ -1,5 +1,6 @@
 #include "api/handlers.hpp"
 
+#include "api/blocking.hpp"
 #include "api/json.hpp"
 
 #include <array>
@@ -185,7 +186,8 @@ asio::awaitable<void> TransactionHandlers::upload(RequestContext& ctx) {
     expected = *digest;
   }
 
-  auto pending = service_.begin_upload(ctx.caller, *id, *path);
+  auto pending =
+      co_await offload(ctx.blocking, [&] { return service_.begin_upload(ctx.caller, *id, *path); });
   if (!pending) {
     co_return co_await fail(ctx, pending.error());
   }
@@ -199,13 +201,15 @@ asio::awaitable<void> TransactionHandlers::upload(RequestContext& ctx) {
     if (*n == 0) {
       break;
     }
-    auto written = pending->write(common::ByteSpan{buf.data(), *n});
+    auto written = co_await offload(
+        ctx.blocking, [&] { return pending->write(common::ByteSpan{buf.data(), *n}); });
     if (!written) {
       co_return co_await fail(ctx, written.error());
     }
   }
 
-  auto entry = pending->finish(expected);
+  // fsync and rename: may take long for a large file.
+  auto entry = co_await offload(ctx.blocking, [&] { return pending->finish(expected); });
   if (!entry) {
     co_return co_await fail(ctx, entry.error());
   }
@@ -264,7 +268,8 @@ asio::awaitable<void> TransactionHandlers::download(RequestContext& ctx) {
 
   // open_download() applies the access and state rules; the transaction is
   // immutable once readable, so the entry read here matches the file.
-  auto file = service_.open_download(ctx.caller, *id, *path);
+  auto file = co_await offload(ctx.blocking,
+                               [&] { return service_.open_download(ctx.caller, *id, *path); });
   if (!file) {
     co_return co_await fail(ctx, file.error());
   }

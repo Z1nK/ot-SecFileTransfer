@@ -16,6 +16,7 @@ Changes since `v0.7.0`, not tagged yet.
 ### Business logic
 
 #### Changed
+- Upload and download file I/O and password checks (LDAP) run on a separate thread pool, so a slow disk, a long `fsync` or a slow directory server no longer stops the server from accepting and serving other requests. New option `rest.blocking_threads` (default `0` = 2 × CPU cores, at least 4).
 - A local group named in `auth.admin_group` is refused as a transaction target (`unknown_destination`), so one send can't reach every admin.
 - Peer tokens may not start with `fta_` either (the prefix of admin tokens).
 
@@ -28,6 +29,7 @@ Changes since `v0.7.0`, not tagged yet.
 ### Technical
 
 #### Changed
+- `api::offload(pool, fn)` ([api/blocking.hpp](src/lib/api/blocking.hpp)) runs a blocking call on the server's `blocking` pool and resumes the coroutine on its strand; handlers get the pool as `RequestContext::blocking`. Used for authentication, `begin_upload`, upload chunk writes, `finish`, `open_download` and download chunk reads.
 - `ftc` source split from one `main.cpp` into modules (`dispatch`, `session`, `password`, `reply`, `local_files`, `outgoing`) and one file per command group under `src/app/cli/commands/`. A command is a `Command` entry in a table, not a branch of an if-chain.
 
 #### Added

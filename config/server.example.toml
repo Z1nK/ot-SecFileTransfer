@@ -9,6 +9,7 @@ root = "/var/lib/confide"        # holds tmp/ and transactions/
 bind = "0.0.0.0"                 # IP or host name (resolved at startup)
 port = 8080
 threads = 0                      # 0 = number of cores
+blocking_threads = 0             # disk I/O and LDAP checks; 0 = 2 x cores, at least 4
 request_timeout_ms = 30000
 
 [tls]

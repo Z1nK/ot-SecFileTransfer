@@ -1,4 +1,5 @@
 #include <api/auth_handlers.hpp>
+#include <api/blocking.hpp>
 #include <api/server.hpp>
 #include <gtest/gtest.h>
 
@@ -8,11 +9,13 @@
 
 #include <chrono>
 #include <filesystem>
+#include <latch>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 using confide::api::Access;
@@ -515,6 +518,71 @@ TEST(ServerStart, StartTwiceFails) {
                     tlog};
   ASSERT_TRUE(server.start());
   EXPECT_EQ(server.start().error().code, ErrCode::internal);
+  server.stop();
+  server.wait();
+}
+
+// Two requests parked in offload() leave the only network thread free; the
+// third blocking thread authenticates the echo request.
+TEST(ServerBlocking, OffloadedCallsDoNotStallOtherRequests) {
+  Router router;
+  FakeAuth auth;
+  confide::logging::TechLog tlog{std::make_unique<NullSink>()};
+  std::latch started{2};
+  std::latch release{1};
+  ASSERT_TRUE(router.add(Route{
+      .method = http::verb::get,
+      .pattern = "/echo/{name}",
+      .access = Access::user,
+      .handler = echo,
+  }));
+  ASSERT_TRUE(router.add(Route{
+      .method = http::verb::get,
+      .pattern = "/block",
+      .access = Access::user,
+      .handler = [&](RequestContext& ctx) -> asio::awaitable<void> {
+        co_await confide::api::offload(ctx.blocking, [&] {
+          started.count_down();
+          release.wait();
+          return 0;
+        });
+        co_await ctx.exchange.send(Response{.body = "done", .content_type = "text/plain"});
+      },
+  }));
+  HttpServer server{
+      ServerOptions{.bind = "127.0.0.1", .port = 0, .threads = 1, .blocking_threads = 3}, router,
+      auth, tlog};
+  ASSERT_TRUE(server.start());
+
+  const auto get = [port = server.port()](const std::string& target) {
+    asio::io_context ioc;
+    beast::tcp_stream stream{ioc};
+    stream.connect(tcp::endpoint{asio::ip::make_address("127.0.0.1"), port});
+    stream.expires_after(std::chrono::seconds(5));
+    http::request<http::empty_body> req{http::verb::get, target, 11};
+    req.set(http::field::host, "localhost");
+    req.set(http::field::authorization, "Bearer user-token");
+    http::write(stream, req);
+    beast::flat_buffer buffer;
+    http::response<http::string_body> res;
+    http::read(stream, buffer, res);
+    return res;
+  };
+
+  std::vector<std::string> blocked(2);
+  std::vector<std::thread> clients;
+  for (auto& body : blocked) {
+    clients.emplace_back([&get, &body] { body = get("/block").body(); });
+  }
+  started.wait();
+
+  EXPECT_EQ(get("/echo/x").result(), http::status::ok);
+
+  release.count_down();
+  for (auto& t : clients) {
+    t.join();
+  }
+  EXPECT_EQ(blocked, (std::vector<std::string>{"done", "done"}));
   server.stop();
   server.wait();
 }

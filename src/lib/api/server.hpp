@@ -17,6 +17,7 @@ struct ServerOptions {
   std::string bind = "0.0.0.0";
   std::uint16_t port = 8080;            // 0 = any free port (tests), see HttpServer::port()
   std::uint32_t threads = 0;            // 0 = hardware_concurrency
+  std::uint32_t blocking_threads = 0;   // 0 = 2 * hardware_concurrency, at least 4
   std::chrono::milliseconds request_timeout{30'000};  // idle time while reading or writing
   std::uint64_t max_upload_bytes = 0;   // 0 = no limit
   std::uint32_t max_header_bytes = 16 * 1024;
@@ -24,7 +25,8 @@ struct ServerOptions {
   // nullptr = plain HTTP. Shared with nothing else; built by make_tls_context().
   std::shared_ptr<asio::ssl::context> tls{};
 
-  // bind, port, threads and timeout from [rest]; TLS from [tls] when enabled.
+  // bind, port, threads, blocking_threads and timeout from [rest]; TLS from
+  // [tls] when enabled.
   // `io` if the certificate or key can't be loaded.
   static Result<ServerOptions> from_config(const config::Config& cfg);
 };
@@ -35,6 +37,9 @@ Result<std::shared_ptr<asio::ssl::context>> make_tls_context(const config::TlsCf
 
 // HTTP/1.1 server on Boost.Asio/Beast (Architecture §10): one io_context
 // run by a fixed thread pool, one coroutine per connection, keep-alive.
+// Blocking work (authentication, file reads and writes) runs on a second
+// pool, see offload(), so a slow disk or directory never stalls the network
+// threads.
 //
 // For each request the session reads only the header, matches it in the
 // Router, authenticates the caller for the route's Access, and calls the

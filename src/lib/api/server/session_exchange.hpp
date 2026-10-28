@@ -1,5 +1,6 @@
 #pragma once
 // Internal to HttpServer: the Exchange a connection hands to handlers.
+#include "api/blocking.hpp"
 #include "api/server/io.hpp"
 
 #include <boost/beast/core.hpp>
@@ -21,8 +22,12 @@ template <class Stream>
 class SessionExchange final : public Exchange {
 public:
   SessionExchange(Stream& stream, beast::flat_buffer& buffer, Parser& parser,
-                  const ServerOptions& options)
-      : stream_(stream), buffer_(buffer), parser_(parser), options_(options) {}
+                  const ServerOptions& options, asio::any_io_executor blocking)
+      : stream_(stream)
+      , buffer_(buffer)
+      , parser_(parser)
+      , options_(options)
+      , blocking_(std::move(blocking)) {}
 
   const RequestHeader& request() const override { return parser_.get().base(); }
 
@@ -134,7 +139,7 @@ public:
     std::vector<std::byte> buf(storage::kChunkBytes);
     std::uint64_t sent = 0;
     while (true) {
-      auto n = file.read(buf);
+      auto n = co_await offload(blocking_, [&] { return file.read(buf); });
       if (!n) {
         // Headers are out, so no error response is possible: drop the
         // connection and let the client notice the short body.
@@ -196,6 +201,7 @@ private:
   beast::flat_buffer& buffer_;
   Parser& parser_;
   const ServerOptions& options_;
+  asio::any_io_executor blocking_;
   bool responded_ = false;
   bool continue_sent_ = false;
   bool close_ = false;

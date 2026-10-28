@@ -62,6 +62,7 @@ root = "/srv/confide"
 bind = "127.0.0.1"
 port = 9000
 threads = 8
+blocking_threads = 16
 request_timeout_ms = 5000
 
 [tls]
@@ -100,6 +101,7 @@ accept_token = "in-0123456789abcdef0123456789abcdef"
   EXPECT_EQ(cfg->rest().bind, "127.0.0.1");
   EXPECT_EQ(cfg->rest().port, 9000);
   EXPECT_EQ(cfg->rest().threads, 8U);
+  EXPECT_EQ(cfg->rest().blocking_threads, 16U);
   EXPECT_EQ(cfg->rest().request_timeout_ms, 5000U);
   EXPECT_TRUE(cfg->tls().enabled);
   EXPECT_EQ(cfg->tls().cert_path, "/etc/confide/cert.pem");
@@ -148,6 +150,7 @@ TEST(ConfigLoader, TypeAndRangeErrors) {
   expect_invalid(with("[rest]\nport = 70000\n"), "rest.port");
   expect_invalid(with("[rest]\nport = 0\n"), "rest.port");
   expect_invalid(with("[rest]\nthreads = -1\n"), "rest.threads");
+  expect_invalid(with("[rest]\nblocking_threads = 2000\n"), "rest.blocking_threads");
   expect_invalid(with("[log]\nlevel = \"verbose\"\n"), "log.level");
   expect_invalid(with("[retention]\ndefault_days = 40\nmax_days = 30\n"), "retention.max_days");
   expect_invalid(with("[retention]\ndefault_days = 0\n"), "retention.default_days");

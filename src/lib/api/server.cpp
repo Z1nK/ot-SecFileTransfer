@@ -95,16 +95,20 @@ Result<void> HttpServer::start() {
 
   auto count = s.options.threads != 0 ? s.options.threads : std::thread::hardware_concurrency();
   count = std::max(count, 1U);
+  const auto blocking_count = s.options.blocking_threads != 0
+                                  ? s.options.blocking_threads
+                                  : std::max(2 * std::thread::hardware_concurrency(), 4U);
   {
     std::lock_guard lock{s.mu};
     s.started = true;
+    s.blocking = std::make_unique<asio::thread_pool>(blocking_count);
     for (unsigned i = 0; i < count; ++i) {
       s.threads.emplace_back([&s] { s.ioc.run(); });
     }
   }
 
-  s.tlog.info(kTag, "listening on {}:{} ({}, {} threads)", shown, s.port.load(),
-              s.options.tls ? "https" : "http", count);
+  s.tlog.info(kTag, "listening on {}:{} ({}, {} threads, {} blocking threads)", shown,
+              s.port.load(), s.options.tls ? "https" : "http", count, blocking_count);
   return {};
 }
 
@@ -122,6 +126,15 @@ void HttpServer::wait() {
     if (t.joinable()) {
       t.join();
     }
+  }
+  // Every coroutine has finished, so nothing is left on the blocking pool.
+  std::unique_ptr<asio::thread_pool> blocking;
+  {
+    std::lock_guard lock{impl_->mu};
+    blocking.swap(impl_->blocking);
+  }
+  if (blocking) {
+    blocking->join();
   }
 }
 

@@ -4,6 +4,7 @@
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/thread_pool.hpp>
 #include <boost/beast/core.hpp>
 
 #include <atomic>
@@ -73,6 +74,9 @@ struct HttpServer::Impl {
   bool started = false;
   bool stopping = false;
   std::vector<std::thread> threads;
+  // Runs offload()ed calls; created by start(), joined by wait() once the
+  // network threads, and with them every request, have finished.
+  std::unique_ptr<asio::thread_pool> blocking;
   std::vector<std::shared_ptr<detail::Connection>> connections;
 };
 

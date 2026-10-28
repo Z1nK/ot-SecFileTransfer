@@ -2,6 +2,8 @@
 #include "api/http.hpp"
 #include "transaction/service.hpp"
 
+#include <boost/asio/any_io_executor.hpp>
+
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -38,6 +40,8 @@ struct RequestContext {
   transaction::Caller caller;
   PathParams params;
   QueryParams query;
+  // The server's pool for blocking calls; pass it to offload().
+  asio::any_io_executor blocking;
 
   // Path parameter by name, nullptr if the route has no such parameter.
   const std::string* param(std::string_view name) const;

@@ -38,6 +38,7 @@ Result<ServerOptions> ServerOptions::from_config(const config::Config& cfg) {
       .bind = cfg.rest().bind,
       .port = cfg.rest().port,
       .threads = cfg.rest().threads,
+      .blocking_threads = cfg.rest().blocking_threads,
       .request_timeout = std::chrono::milliseconds{cfg.rest().request_timeout_ms},
   };
   if (cfg.tls().enabled) {
