@@ -20,6 +20,11 @@
 
 #include <boost/program_options.hpp>
 
+#ifndef _WIN32
+#include <pwd.h>
+#include <unistd.h>
+#endif
+
 #include <filesystem>
 #include <iostream>
 #include <optional>
@@ -31,12 +36,34 @@ namespace po = boost::program_options;
 
 using namespace confide;
 
+namespace {
+
+// The account ftc runs as, from the passwd database (NSS, so LDAP accounts
+// too), not from $USER. Empty if the lookup fails.
+#ifdef _WIN32
+// TODO: GetUserNameW(). Until then --user or FTC_USER is required.
+std::string system_user() { return {}; }
+#else
+std::string system_user() {
+  const long hint = sysconf(_SC_GETPW_R_SIZE_MAX);
+  std::vector<char> buf(hint > 0 ? static_cast<std::size_t>(hint) : 16384);
+  passwd pwd{};
+  passwd* found = nullptr;
+  if (getpwuid_r(geteuid(), &pwd, buf.data(), buf.size(), &found) != 0 || found == nullptr) {
+    return {};
+  }
+  return found->pw_name;
+}
+#endif
+
+}  // namespace
+
 int main(int argc, char** argv) {
   po::options_description global("Options");
   global.add_options()("help,h", "show this help")(
       "server,s", po::value<std::string>()->value_name("URL"),
       "server, e.g. https://siteA:8080 (env FTC_SERVER)")(
-      "user,u", po::value<std::string>()->value_name("NAME"), "user name (env FTC_USER)")(
+      "user,u", po::value<std::string>()->value_name("NAME"), "user name (env FTC_USER; default: current OS user)")(
       "ca-file", po::value<std::string>()->value_name("PATH"),
       "PEM CA bundle for https (env FTC_CA_FILE; default: system CAs)")(
       "allow-http", "allow a plain http:// server; the password is sent unencrypted "
@@ -97,7 +124,7 @@ int main(int argc, char** argv) {
 
   cli::Global g{
       .server = vm.contains("server") ? vm["server"].as<std::string>() : std::string{},
-      .user = vm.contains("user") ? vm["user"].as<std::string>() : std::string{},
+      .user = vm.contains("user") ? vm["user"].as<std::string>() : system_user(),
       .ca_file = vm.contains("ca-file") && !vm["ca-file"].as<std::string>().empty()
                      ? std::optional<fs::path>{vm["ca-file"].as<std::string>()}
                      : std::nullopt,
