@@ -14,7 +14,10 @@ namespace confide::transaction {
 // keeps all of them in memory, so listing an inbox never scans the disk.
 // meta.json is the source of truth: the index is only a cache of it.
 //
-// Thread-safe for single calls.
+// Thread-safe for single calls. Disk I/O runs outside the index lock, so a
+// slow fsync never blocks find() on other transactions; callers must
+// therefore serialize writes to one transaction (TransactionService does,
+// with its per-transaction mutex).
 class TransactionRepository {
 public:
   explicit TransactionRepository(storage::FileStore& store) : store_(store) {}

@@ -40,11 +40,15 @@ Result<void> TransactionRepository::load() {
 }
 
 Result<void> TransactionRepository::insert(const Transaction& tx) {
-  const std::scoped_lock lock(mu_);
-  if (index_.contains(tx.id)) {
-    return std::unexpected(
-        Error::make(ErrCode::conflict, std::format("transaction {} exists", tx.id.str())));
+  {
+    const std::scoped_lock lock(mu_);
+    if (index_.contains(tx.id)) {
+      return std::unexpected(
+          Error::make(ErrCode::conflict, std::format("transaction {} exists", tx.id.str())));
+    }
   }
+  // Outside the lock: creating the folder is atomic and fails with
+  // `conflict` if a concurrent insert of the same id got there first.
   CFD_TRYV(store_.create_transaction(tx.id));
   if (auto written = store_.write_document(tx.id, storage::Document::meta, encode_meta(tx));
       !written) {
@@ -52,19 +56,21 @@ Result<void> TransactionRepository::insert(const Transaction& tx) {
     (void)store_.remove_transaction(tx.id);
     return written;
   }
+  const std::scoped_lock lock(mu_);
   index_.emplace(tx.id, tx);
   return {};
 }
 
 Result<void> TransactionRepository::save(const Transaction& tx) {
-  const std::scoped_lock lock(mu_);
-  const auto it = index_.find(tx.id);
-  if (it == index_.end()) {
+  if (!find(tx.id)) {
     return std::unexpected(
         Error::make(ErrCode::notfound, std::format("no transaction {}", tx.id.str())));
   }
   CFD_TRYV(store_.write_document(tx.id, storage::Document::meta, encode_meta(tx)));
-  it->second = tx;
+  const std::scoped_lock lock(mu_);
+  if (const auto it = index_.find(tx.id); it != index_.end()) {
+    it->second = tx;
+  }
   return {};
 }
 
@@ -73,8 +79,8 @@ Result<void> TransactionRepository::save_manifest(const Transaction& tx) {
 }
 
 Result<void> TransactionRepository::remove(const common::TransactionId& id) {
-  const std::scoped_lock lock(mu_);
   CFD_TRYV(store_.remove_transaction(id));
+  const std::scoped_lock lock(mu_);
   index_.erase(id);
   return {};
 }

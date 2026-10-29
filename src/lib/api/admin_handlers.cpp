@@ -1,5 +1,6 @@
 #include "api/admin_handlers.hpp"
 
+#include "api/blocking.hpp"
 #include "logging/business_log_reader.hpp"
 
 #include <array>
@@ -202,7 +203,9 @@ asio::awaitable<void> AdminHandlers::remove(RequestContext& ctx) {
   if (!id) {
     co_return co_await fail(ctx, id.error());
   }
-  auto removed = service_.admin_delete(ctx.caller, *id);
+  // Deletes the transaction folder with all its files.
+  auto removed =
+      co_await offload(ctx.blocking, [&] { return service_.admin_delete(ctx.caller, *id); });
   if (!removed) {
     co_return co_await fail(ctx, removed.error());
   }
@@ -223,7 +226,8 @@ asio::awaitable<void> AdminHandlers::retention(RequestContext& ctx) {
   if (!days) {
     co_return co_await fail(ctx, days.error());
   }
-  auto tx = service_.set_retention(ctx.caller, *id, *days);
+  auto tx = co_await offload(ctx.blocking,
+                             [&] { return service_.set_retention(ctx.caller, *id, *days); });
   if (!tx) {
     co_return co_await fail(ctx, tx.error());
   }
