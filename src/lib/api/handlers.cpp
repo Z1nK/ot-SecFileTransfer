@@ -131,7 +131,7 @@ asio::awaitable<void> TransactionHandlers::create(RequestContext& ctx) {
   if (!req) {
     co_return co_await fail(ctx, req.error());
   }
-  auto tx = service_.create(ctx.caller, *req);
+  auto tx = co_await offload(ctx.blocking, [&] { return service_.create(ctx.caller, *req); });
   if (!tx) {
     co_return co_await fail(ctx, tx.error());
   }
@@ -225,7 +225,8 @@ asio::awaitable<void> TransactionHandlers::remove_file(RequestContext& ctx) {
   if (!path) {
     co_return co_await fail(ctx, path.error());
   }
-  auto removed = service_.remove_file(ctx.caller, *id, *path);
+  auto removed = co_await offload(ctx.blocking,
+                                  [&] { return service_.remove_file(ctx.caller, *id, *path); });
   if (!removed) {
     co_return co_await fail(ctx, removed.error());
   }
@@ -237,7 +238,8 @@ asio::awaitable<void> TransactionHandlers::commit(RequestContext& ctx) {
   if (!id) {
     co_return co_await fail(ctx, id.error());
   }
-  auto tx = service_.commit(ctx.caller, *id);
+  // Re-hashes every file (NFR-6): may take long for a large transaction.
+  auto tx = co_await offload(ctx.blocking, [&] { return service_.commit(ctx.caller, *id); });
   if (!tx) {
     co_return co_await fail(ctx, tx.error());
   }
@@ -312,7 +314,7 @@ asio::awaitable<void> TransactionHandlers::receive(RequestContext& ctx) {
   if (!req) {
     co_return co_await fail(ctx, req.error());
   }
-  auto tx = service_.receive(ctx.caller, *req);
+  auto tx = co_await offload(ctx.blocking, [&] { return service_.receive(ctx.caller, *req); });
   if (!tx) {
     co_return co_await fail(ctx, tx.error());
   }
