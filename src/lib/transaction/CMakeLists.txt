@@ -8,6 +8,15 @@ add_library(${LOCAL_LIB_NAME} STATIC
   transaction.cpp
 )
 
+# TransactionService members, one file per section of service.hpp.
+target_sources(${LOCAL_LIB_NAME} PRIVATE
+  service/admin.cpp
+  service/jobs.cpp
+  service/peer.cpp
+  service/reading.cpp
+  service/sender.cpp
+)
+
 add_library(${PROJECT_NAMESPACE}::transaction-static ALIAS ${LOCAL_LIB_NAME})
 
 set_property(TARGET ${LOCAL_LIB_NAME} PROPERTY POSITION_INDEPENDENT_CODE ON)
