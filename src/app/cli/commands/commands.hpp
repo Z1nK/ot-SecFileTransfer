@@ -2,7 +2,7 @@
 // The ftc commands. Each one declares its own options and runs against the
 // server; dispatch.cpp picks one by name, parses its arguments and runs it.
 #include "cli.hpp"
-#include "outgoing.hpp"
+#include <client/outgoing.hpp>
 
 #include <boost/program_options.hpp>
 
@@ -42,6 +42,9 @@ extern const Command kCommit;
 // --to, --retention, --comment of `send` and `create`.
 void new_transaction_options(po::options_description& desc);
 NewTransaction new_transaction_from(const po::variables_map& vm);
+
+// Prints each file's path as upload_files() stores it (`send` and `add`).
+void print_uploaded(const LocalFile& file);
 
 // commands/query.cpp
 extern const Command kInbox;

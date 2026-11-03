@@ -1,7 +1,7 @@
 #pragma once
-// Building an outgoing transaction: create, upload, commit. Shared by `send`
-// (all steps at once) and `create` / `add` / `rm` / `commit` (one step each).
-#include "cli.hpp"
+// Building an outgoing transaction: create, upload, commit. In ftc, shared by
+// `send` (all steps at once) and `create` / `add` / `rm` / `commit` (one step each).
+#include "client.hpp"
 #include "local_files.hpp"
 
 #include <common/id.hpp>
@@ -9,11 +9,12 @@
 
 #include <boost/json.hpp>
 
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
 
-namespace confide::cli {
+namespace confide::client {
 
 struct NewTransaction {
   std::string to;  // USER or GROUP, optionally @SERVER
@@ -25,13 +26,17 @@ struct NewTransaction {
 Result<common::TransactionId> create_transaction(net::HttpClient& client,
                                                  const NewTransaction& req);
 
-// Uploads each file with its checksum, printing its path once it is stored.
+// Called after each file is stored, e.g. to show progress.
+using OnUploaded = std::function<void(const LocalFile&)>;
+
+// Uploads each file with its checksum, calling `on_uploaded` once it is stored.
 // A file already in the transaction under the same path is replaced.
 Result<void> upload_files(net::HttpClient& client, const common::TransactionId& id,
-                          const std::vector<LocalFile>& files);
+                          const std::vector<LocalFile>& files,
+                          const OnUploaded& on_uploaded = {});
 
 // Commits; returns the transaction as the server sent it back.
 Result<boost::json::object> commit_transaction(net::HttpClient& client,
                                                const common::TransactionId& id);
 
-}  // namespace confide::cli
+}  // namespace confide::client

@@ -55,7 +55,7 @@ the service hands out.
 
 ### Library dependencies
 
-Static libraries under `src/lib/` (CMake targets `confide::<name>-static`) and the
+Static libraries under `src/lib/confide/` and `src/lib/client/` (CMake targets `confide::<name>-static`) and the
 executables under `src/app/`, as linked in their `CMakeLists.txt`. An arrow
 points from a target to what it links, in that target's color (the color of
 its border); solid = `PUBLIC` (its headers use the dependency, so users of the
@@ -72,6 +72,7 @@ flowchart TB
     end
 
     subgraph libs[Libraries]
+        client
         forwarder
         retention
         api
@@ -123,6 +124,10 @@ flowchart TB
     config --> common
     logging --> common
 
+    ftc -.-> client
+    client --> net
+    client --> common
+
     %% Arrow and border color = the target the arrow starts from.
     %% linkStyle counts arrows in the order declared above (from 0):
     %% adding or removing one shifts the numbers after it.
@@ -138,6 +143,8 @@ flowchart TB
     linkStyle 25 stroke:#64748b,stroke-width:2px
     linkStyle 26,27 stroke:#a16207,stroke-width:2px
     linkStyle 28 stroke:#0f766e,stroke-width:2px
+    linkStyle 29 stroke:#9333ea,stroke-width:2px
+    linkStyle 30,31 stroke:#4f46e5,stroke-width:2px
     style server stroke:#2563eb,stroke-width:3px
     style ftc stroke:#9333ea,stroke-width:3px
     style passwd stroke:#db2777,stroke-width:3px
@@ -150,6 +157,7 @@ flowchart TB
     style storage stroke:#64748b,stroke-width:3px
     style config stroke:#a16207,stroke-width:3px
     style logging stroke:#0f766e,stroke-width:3px
+    style client stroke:#4f46e5,stroke-width:3px
 ```
 
 Things the graph shows:
@@ -160,7 +168,8 @@ Things the graph shows:
   `auth` or `forwarder`; `main` hands it lambdas (`DestinationCheck`,
   `MembershipCheck`, `CommitHook`).
 - `ftc` shares only `net` and `common` with the server; it never links the
-  server libraries.
+  server libraries. The UI-independent part of `ftc` lives in `client`
+  (`src/lib/client/`), so other front ends (GUI, ...) can reuse it.
 - `forwarder -> api` is the one link that goes sideways: it uses
   `api::encode_receive()` so that the push body is exactly what the peer's
   `decode_receive()` parses. It is `PRIVATE`, so nothing above inherits it.
@@ -182,16 +191,17 @@ External libraries, per target:
 | `api` | Boost (Asio, Beast), OpenSSL::SSL, Threads | Boost.JSON |
 | `net` | Boost (headers) | Boost.JSON, OpenSSL::SSL, Threads |
 | `forwarder` | | Boost.JSON |
+| `client` | Boost (headers), Boost.JSON | |
 | `ftc` | | Boost.JSON, Boost.ProgramOptions, OpenSSL::SSL, Threads |
 
 ### Error model
 
 Every fallible function returns `common::Result<T>` = `std::expected<T, Error>`
-([common/error.hpp](src/lib/common/error.hpp)). `CFD_TRY(var, expr)` /
+([common/error.hpp](src/lib/confide/common/error.hpp)). `CFD_TRY(var, expr)` /
 `CFD_TRYV(expr)` work like Rust's `?`: on error they return early with the
 same `Error`. Errors bubble up unchanged to the handler, which turns
 `Error::code` into an HTTP status with `status_for()`
-([api/http.cpp](src/lib/api/http.cpp)):
+([api/http.cpp](src/lib/confide/api/http.cpp)):
 
 | ErrCode | HTTP |
 |---|---|
@@ -279,7 +289,7 @@ configured peer.
 ## 3. Routes
 
 Registered in `TransactionHandlers::register_routes()`
-([api/handlers.cpp](src/lib/api/handlers.cpp)). Each `Def` becomes a
+([api/handlers.cpp](src/lib/confide/api/handlers.cpp)). Each `Def` becomes a
 `Route{method, pattern, access, handler}`; the handler is a lambda that calls
 the member function: `[this, fn](RequestContext& ctx) { return (this->*fn)(ctx); }`.
 
@@ -310,12 +320,12 @@ the member function: `[this, fn](RequestContext& ctx) { return (this->*fn)(ctx);
 | DELETE | `/admin/sessions/{user}` | admin | `AdminHandlers::revoke_user` | `sessions.revoke_user` |
 | GET | `/admin/log` | admin | `AdminHandlers::log` | `logging::read_business_log` |
 
-The `/admin/*` routes ([api/admin_handlers.cpp](src/lib/api/admin_handlers.cpp))
+The `/admin/*` routes ([api/admin_handlers.cpp](src/lib/confide/api/admin_handlers.cpp))
 are registered by `main` only when `auth.admin_group` is set.
 
 `{name}` matches one path segment, `{name*}` matches the rest including `/`.
 
-`Access` ([api/router.hpp](src/lib/api/router.hpp)) says which credentials
+`Access` ([api/router.hpp](src/lib/confide/api/router.hpp)) says which credentials
 the server accepts before the handler runs:
 
 | Access | Authorization header |
@@ -336,7 +346,7 @@ admin token opens no user route and a user token no admin route.
 
 ### 4.1 Threads and coroutines
 
-[api/server.cpp](src/lib/api/server.cpp)
+[api/server.cpp](src/lib/confide/api/server.cpp)
 
 ```
 HttpServer::start()
@@ -356,7 +366,7 @@ different connections run in parallel.
 
 All handler code runs on those threads. Service and storage calls are
 **synchronous**, so the calls that can block for long are moved to the
-`blocking` pool with `co_await offload(pool, fn)` ([api/blocking.hpp](src/lib/api/blocking.hpp)):
+`blocking` pool with `co_await offload(pool, fn)` ([api/blocking.hpp](src/lib/confide/api/blocking.hpp)):
 authentication (may call LDAP), `begin_upload`, each upload chunk write,
 `finish` (fsync + rename), `open_download` and each download chunk read. The
 coroutine stays suspended meanwhile and resumes on its own strand, so the
@@ -452,7 +462,7 @@ Impl::dispatch(ex)
 ```
 
 **User tokens** — `auth::SessionStore`
-([auth/session_store.cpp](src/lib/auth/session_store.cpp)), one mutex:
+([auth/session_store.cpp](src/lib/confide/auth/session_store.cpp)), one mutex:
 
 - `issue(user)`: 32 bytes from `RAND_bytes` → token `"ftu_" + 64 hex`.
   Only `SHA-256(token)` is stored as the map key, with `{user, created,
@@ -466,7 +476,7 @@ Impl::dispatch(ex)
 - In memory only: a restart logs everybody out.
 
 **Password guessing** — `auth::LoginLimiter`
-([auth/login_limiter.cpp](src/lib/auth/login_limiter.cpp)), one mutex.
+([auth/login_limiter.cpp](src/lib/confide/auth/login_limiter.cpp)), one mutex.
 Three counters per failure, user names lowercased:
 
 | Key | Free failures | Stops |
@@ -485,7 +495,7 @@ Basic credentials go through the limiter; tokens do not.
 ### 4.4 Exchange: how handlers talk to the socket
 
 Handlers never see the socket. They use `api::Exchange`
-([api/http.hpp](src/lib/api/http.hpp)), implemented by
+([api/http.hpp](src/lib/confide/api/http.hpp)), implemented by
 `SessionExchange<Stream>` in server.cpp (and by a fake in tests).
 
 | Method | What it does |
@@ -520,9 +530,9 @@ if (!x) co_return co_await fail(ctx, x.error());
 ## 5. Per-endpoint chains
 
 Notation: `→` = calls. All `service_` methods are in
-[transaction/service.cpp](src/lib/transaction/service.cpp), `repo_` in
-[transaction/repository.cpp](src/lib/transaction/repository.cpp), `store_` in
-[storage/storage.cpp](src/lib/storage/storage.cpp).
+[transaction/service.cpp](src/lib/confide/transaction/service.cpp), `repo_` in
+[transaction/repository.cpp](src/lib/confide/transaction/repository.cpp), `store_` in
+[storage/storage.cpp](src/lib/confide/storage/storage.cpp).
 
 ### Shared building blocks
 
@@ -536,7 +546,7 @@ Notation: `→` = calls. All `service_` methods are in
 - `may_write` = sender or origin peer
 - `may_read` = sender, origin peer, or target once the state is no longer `open`
 
-**State machine** ([transaction/state_machine.cpp](src/lib/transaction/state_machine.cpp)):
+**State machine** ([transaction/state_machine.cpp](src/lib/confide/transaction/state_machine.cpp)):
 
 ```
 open ──► committed ──► delivered
@@ -728,7 +738,7 @@ and commits with `POST /internal/transactions/{id}/commit`. These use the same
 
 ### 5.9 POST /auth/token (login) and DELETE /auth/token (logout)
 
-[api/auth_handlers.cpp](src/lib/api/auth_handlers.cpp)
+[api/auth_handlers.cpp](src/lib/confide/api/auth_handlers.cpp)
 
 ```
 AuthHandlers::login(ctx)                       // Access::password: Basic already checked
@@ -750,9 +760,9 @@ Logout with Basic credentials is accepted and does nothing.
 
 ### 5.10 Forwarding (sending side, FR-10)
 
-[forwarder/forwarder.cpp](src/lib/forwarder/forwarder.cpp). Not a route: a
+[forwarder/forwarder.cpp](src/lib/confide/forwarder/forwarder.cpp). Not a route: a
 worker thread on the sender's server that calls the peer's `/internal` API
-(§5.8) with [net::HttpClient](src/lib/net/http_client.hpp).
+(§5.8) with [net::HttpClient](src/lib/confide/net/http_client.hpp).
 
 ```
 service.commit(alice, id)              // target_server = "siteB"
@@ -895,12 +905,12 @@ main: signal_io.run() returns -> server.wait() joins all threads
 [dispatch.cpp](src/app/cli/dispatch.cpp) (command lookup and argument
 parsing), [session.cpp](src/app/cli/session.cpp) (connect, login),
 [password.cpp](src/app/cli/password.cpp),
-[token_cache.cpp](src/app/cli/token_cache.cpp),
-[reply.cpp](src/app/cli/reply.cpp) (JSON replies),
-[local_files.cpp](src/app/cli/local_files.cpp) (collecting and hashing files),
-[outgoing.cpp](src/app/cli/outgoing.cpp) (create, upload, commit; shared by
+[token_cache.cpp](src/lib/client/token_cache.cpp),
+[reply.cpp](src/lib/client/reply.cpp) (JSON replies),
+[local_files.cpp](src/lib/client/local_files.cpp) (collecting and hashing files),
+[outgoing.cpp](src/lib/client/outgoing.cpp) (create, upload, commit; shared by
 `send` and the step-by-step commands) and one file per command group under [commands/](src/app/cli/commands/); plus
-the HTTP client [net/http_client.cpp](src/lib/net/http_client.cpp), which the
+the HTTP client [net/http_client.cpp](src/lib/confide/net/http_client.cpp), which the
 server's forwarder uses too. A separate executable; it shares only `common`
 and `net` with the server.
 

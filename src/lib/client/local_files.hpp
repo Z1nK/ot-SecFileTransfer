@@ -1,6 +1,6 @@
 #pragma once
 // Local files: picking what to send, checksums.
-#include "cli.hpp"
+#include "client.hpp"
 
 #include <common/path_sanitizer.hpp>
 #include <common/sha256.hpp>
@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-namespace confide::cli {
+namespace confide::client {
 
 Result<common::Sha256Digest> hash_file(const std::filesystem::path& path);
 
@@ -23,4 +23,4 @@ struct LocalFile {
 // `validation` if nothing is left or two files would get the same path.
 Result<std::vector<LocalFile>> collect_files(const std::vector<std::string>& args);
 
-}  // namespace confide::cli
+}  // namespace confide::client

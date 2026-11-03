@@ -568,8 +568,10 @@ With the server running and the flow above done, these should hold:
 src/app/main/      confide-server entry point
 src/app/passwd/    confide-passwd
 src/app/cli/       ftc
-src/lib/           common, config, logging, storage, auth, transaction, retention,
+src/lib/confide/   common, config, logging, storage, auth, transaction, retention,
                    net (HTTP client, shared by ftc and forwarder), api, forwarder
+src/lib/client/    client library for the front ends (ftc, future GUI): token
+                   cache, local files, JSON replies, outgoing transactions
 tests/unit/        GoogleTest unit tests, one folder per module
 tests/integration/ end-to-end test with two servers
 tests/bench/       benchmark and memory check

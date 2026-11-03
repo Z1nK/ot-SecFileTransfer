@@ -1,7 +1,7 @@
 // ftc get: download and verify all files of a transaction.
 #include "commands.hpp"
-#include "local_files.hpp"
-#include "reply.hpp"
+#include <client/local_files.hpp>
+#include <client/reply.hpp>
 #include "session.hpp"
 
 #include <boost/beast/http/verb.hpp>

@@ -7,7 +7,7 @@
 #include <string>
 #include <string_view>
 
-namespace confide::cli {
+namespace confide::client {
 
 using common::Result;
 using net::ServerUrl;
@@ -49,4 +49,4 @@ private:
   std::filesystem::path file_;
 };
 
-}  // namespace confide::cli
+}  // namespace confide::client

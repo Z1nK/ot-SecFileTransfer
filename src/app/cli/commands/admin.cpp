@@ -2,7 +2,7 @@
 // Uses its own admin token (POST /admin/token), kept apart from the user
 // token, so `ftc login` alone never grants admin rights.
 #include "commands.hpp"
-#include "reply.hpp"
+#include <client/reply.hpp>
 #include "session.hpp"
 
 #include <common/time.hpp>

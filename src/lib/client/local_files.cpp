@@ -8,7 +8,7 @@
 #include <system_error>
 #include <utility>
 
-namespace confide::cli {
+namespace confide::client {
 
 namespace fs = std::filesystem;
 
@@ -76,4 +76,4 @@ Result<std::vector<LocalFile>> collect_files(const std::vector<std::string>& arg
   return out;
 }
 
-}  // namespace confide::cli
+}  // namespace confide::client

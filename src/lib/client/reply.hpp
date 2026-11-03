@@ -1,7 +1,7 @@
 #pragma once
 // Reading the server's JSON replies. Missing or mistyped fields read as
 // empty/zero, so a newer server with extra or changed fields still lists.
-#include "cli.hpp"
+#include "client.hpp"
 
 #include <boost/json.hpp>
 
@@ -9,7 +9,7 @@
 #include <string>
 #include <string_view>
 
-namespace confide::cli {
+namespace confide::client {
 
 namespace json = boost::json;
 
@@ -28,4 +28,4 @@ std::uint64_t num(const json::object& obj, std::string_view key);
 std::string address(const json::object& tx, std::string_view user_key,
                     std::string_view server_key);
 
-}  // namespace confide::cli
+}  // namespace confide::client

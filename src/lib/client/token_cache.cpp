@@ -11,7 +11,7 @@
 #include <system_error>
 #include <utility>
 
-namespace confide::cli {
+namespace confide::client {
 
 namespace fs = std::filesystem;
 
@@ -198,4 +198,4 @@ Result<void> TokenCache::remove() const {
   return {};
 }
 
-}  // namespace confide::cli
+}  // namespace confide::client

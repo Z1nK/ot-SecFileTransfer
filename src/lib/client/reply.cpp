@@ -3,7 +3,7 @@
 #include <format>
 #include <utility>
 
-namespace confide::cli {
+namespace confide::client {
 
 Result<json::object> parse_object(std::string_view text) {
   boost::system::error_code ec;
@@ -49,4 +49,4 @@ std::string address(const json::object& tx, std::string_view user_key,
   return out;
 }
 
-}  // namespace confide::cli
+}  // namespace confide::client

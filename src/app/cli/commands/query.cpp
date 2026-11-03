@@ -1,6 +1,6 @@
 // ftc inbox, outbox, show, files: read-only views of transactions.
 #include "commands.hpp"
-#include "reply.hpp"
+#include <client/reply.hpp>
 #include "session.hpp"
 
 #include <boost/beast/http/verb.hpp>

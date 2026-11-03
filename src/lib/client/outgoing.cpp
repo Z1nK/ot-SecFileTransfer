@@ -4,9 +4,7 @@
 
 #include <boost/beast/http/verb.hpp>
 
-#include <iostream>
-
-namespace confide::cli {
+namespace confide::client {
 
 namespace {
 
@@ -34,12 +32,15 @@ Result<common::TransactionId> create_transaction(net::HttpClient& client,
 }
 
 Result<void> upload_files(net::HttpClient& client, const common::TransactionId& id,
-                          const std::vector<LocalFile>& files) {
+                          const std::vector<LocalFile>& files,
+                          const OnUploaded& on_uploaded) {
   for (const auto& file : files) {
     CFD_TRY(sha, hash_file(file.source));
     CFD_TRYV(client.upload(tx_target(id) + "/files/" + net::url_encode_path(file.path.str()),
                            file.source, sha));
-    std::cout << "  " << file.path.str() << '\n';
+    if (on_uploaded) {
+      on_uploaded(file);
+    }
   }
   return {};
 }
@@ -50,4 +51,4 @@ Result<json::object> commit_transaction(net::HttpClient& client,
   return parse_object(reply);
 }
 
-}  // namespace confide::cli
+}  // namespace confide::client

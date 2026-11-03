@@ -1,9 +1,9 @@
 // ftc create, add, rm, commit: build a transaction step by step. `send` does
 // all of it at once; these leave the transaction open between the steps.
 #include "commands.hpp"
-#include "local_files.hpp"
-#include "outgoing.hpp"
-#include "reply.hpp"
+#include <client/local_files.hpp>
+#include <client/outgoing.hpp>
+#include <client/reply.hpp>
 #include "session.hpp"
 
 #include <common/path_sanitizer.hpp>
@@ -46,7 +46,7 @@ Result<void> run_add(const Global& global, const po::variables_map& vm) {
   CFD_TRY(id, common::TransactionId::parse(vm["id"].as<std::string>()));
   CFD_TRY(files, collect_files(vm["path"].as<std::vector<std::string>>()));
   CFD_TRY(client, connect(global));
-  CFD_TRYV(upload_files(client, id, files));
+  CFD_TRYV(upload_files(client, id, files, print_uploaded));
   std::cout << "added " << files.size() << " files to " << id.str() << '\n';
   return {};
 }
@@ -105,6 +105,10 @@ NewTransaction new_transaction_from(const po::variables_map& vm) {
       .comment = vm.contains("comment") ? std::optional{vm["comment"].as<std::string>()}
                                         : std::nullopt,
   };
+}
+
+void print_uploaded(const LocalFile& file) {
+  std::cout << "  " << file.path.str() << '\n';
 }
 
 const Command kCreate{

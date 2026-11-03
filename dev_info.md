@@ -86,16 +86,18 @@ first: see [2. Add a REST endpoint to the server](#2-add-a-rest-endpoint-to-the-
   the token expires. Use `open_session(global)` only for commands that manage
   the token themselves (`login`, `logout`).
 - **Don't trust server replies.** Read fields with `str()` / `num()` from
-  [reply.hpp](src/app/cli/reply.hpp) (a missing field gives `""` / `0`), and
+  [reply.hpp](src/lib/client/reply.hpp) (a missing field gives `""` / `0`), and
   pass server paths through `common::RelativePath::parse` before using
   them as local paths.
 - **Build URLs from parsed values.** Use `tx_target(id)` (in
-  [cli.hpp](src/app/cli/cli.hpp)) for `/transactions/{id}`, and `net::url_encode_path()` for file paths in a URL.
+  [client/client.hpp](src/lib/client/client.hpp)) for `/transactions/{id}`, and `net::url_encode_path()` for file paths in a URL.
 - **Keep output stable.** The integration tests and users' scripts read it:
   one item per line, IDs in the first column.
-- **Helpers shared by several commands** go into the matching module next to
-  `main.cpp` (`reply`, `local_files`, `session`, `outgoing`), not into a
-  command file. See [Sharing code between commands](#sharing-code-between-commands).
+- **Helpers shared by several commands** go into a module, not into a
+  command file: protocol logic with no terminal I/O into the client library
+  [src/lib/client/](src/lib/client/) (`reply`, `local_files`, `outgoing`,
+  `token_cache`), so other front ends (GUI, ...) can reuse it; terminal glue
+  next to `main.cpp` (`session`, `password`). See [Sharing code between commands](#sharing-code-between-commands).
 
 ### Worked example: how `ftc rm ID PATH...` was added
 
@@ -187,9 +189,10 @@ ftc".
 
 ### Sharing code between commands
 
-When two commands do the same steps, put the steps in a module next to
-`main.cpp` and call it from both. Example:
-[outgoing.cpp](src/app/cli/outgoing.cpp) has `create_transaction`,
+When two commands do the same steps, put the steps in a module and call it
+from both (in [src/lib/client/](src/lib/client/) unless it prints or prompts:
+pass a callback instead, like `upload_files`' `on_uploaded`). Example:
+[outgoing.cpp](src/lib/client/outgoing.cpp) has `create_transaction`,
 `upload_files` and `commit_transaction`. `send` calls all three; `create`,
 `add` and `commit` call one each. Options shared by several commands go
 into a function declared in `commands.hpp` (`new_transaction_options` /
@@ -246,7 +249,7 @@ The layers have separate jobs (see
   Knows nothing about HTTP.
 
 A route is one `Def` in `TransactionHandlers::register_routes()`
-([api/handlers.cpp](src/lib/api/handlers.cpp)):
+([api/handlers.cpp](src/lib/confide/api/handlers.cpp)):
 
 ```cpp
 Def{
@@ -257,7 +260,7 @@ Def{
 },
 ```
 
-`Access` ([api/router.hpp](src/lib/api/router.hpp)): `user` takes Basic or a
+`Access` ([api/router.hpp](src/lib/confide/api/router.hpp)): `user` takes Basic or a
 user token, `password` takes Basic only, `peer` takes only a peer's
 `accept_token` (use it for `/internal/...` routes).
 
@@ -265,11 +268,11 @@ user token, `password` takes Basic only, `peer` takes only a peer's
 
 | # | Where | What |
 |---|-------|------|
-| 1 | [transaction/service.hpp](src/lib/transaction/service.hpp) / [service.cpp](src/lib/transaction/service.cpp) | The service function, if no existing one does the work. Lock the transaction, check access (`may_write` / read rules), check the state, change it, record a business event. Return `forbidden`, `notfound`, `conflict` etc.; never an HTTP status. |
-| 2 | [logging/business_log.hpp](src/lib/logging/business_log.hpp) | A new `BizEventType` (and its name in `business_log.cpp`), if the action is new and must be audited. |
-| 3 | [api/json.hpp](src/lib/api/json.hpp) / [json.cpp](src/lib/api/json.cpp) | `decode_*` for a new request body, `encode_*` for a new response shape, with the JSON written out in the comment. Reuse `encode_transaction` / `encode_files` / `encode_file` when they fit. |
-| 4 | [api/handlers.hpp](src/lib/api/handlers.hpp) | Declare the handler with a comment `// METHOD /pattern -> status + body`, in the Users or Peers block. |
-| 5 | [api/handlers.cpp](src/lib/api/handlers.cpp) | The handler, and its `Def` in `register_routes()`. If the endpoint only reuses an existing handler (like `GET /internal/transactions/{id}` reuses `get`), the `Def` is all you add. |
+| 1 | [transaction/service.hpp](src/lib/confide/transaction/service.hpp) / [service.cpp](src/lib/confide/transaction/service.cpp) | The service function, if no existing one does the work. Lock the transaction, check access (`may_write` / read rules), check the state, change it, record a business event. Return `forbidden`, `notfound`, `conflict` etc.; never an HTTP status. |
+| 2 | [logging/business_log.hpp](src/lib/confide/logging/business_log.hpp) | A new `BizEventType` (and its name in `business_log.cpp`), if the action is new and must be audited. |
+| 3 | [api/json.hpp](src/lib/confide/api/json.hpp) / [json.cpp](src/lib/confide/api/json.cpp) | `decode_*` for a new request body, `encode_*` for a new response shape, with the JSON written out in the comment. Reuse `encode_transaction` / `encode_files` / `encode_file` when they fit. |
+| 4 | [api/handlers.hpp](src/lib/confide/api/handlers.hpp) | Declare the handler with a comment `// METHOD /pattern -> status + body`, in the Users or Peers block. |
+| 5 | [api/handlers.cpp](src/lib/confide/api/handlers.cpp) | The handler, and its `Def` in `register_routes()`. If the endpoint only reuses an existing handler (like `GET /internal/transactions/{id}` reuses `get`), the `Def` is all you add. |
 | 6 | [tests/unit/transaction/service_test.cpp](tests/unit/transaction/service_test.cpp) | Tests of the service rules: who is allowed, which states are refused. |
 | 7 | [tests/unit/api/json_test.cpp](tests/unit/api/json_test.cpp) | Tests for new `decode_*` / `encode_*` functions, including bad input. |
 | 8 | [tests/integration/two_sites.sh](tests/integration/two_sites.sh) | A step that calls the endpoint over HTTPS (through `ftc`, or `curl` with the saved token, as step 3 does) and checks status and result. There are no unit tests for `TransactionHandlers` themselves; this is where the HTTP mapping is tested. |
@@ -280,7 +283,7 @@ user token, `password` takes Basic only, `peer` takes only a peer's
 
 A new group of endpoints that has nothing to do with transactions (like
 `/auth/token`) gets its own handler class with its own `register_routes()`,
-as [api/auth_handlers.cpp](src/lib/api/auth_handlers.cpp) does, called from
+as [api/auth_handlers.cpp](src/lib/confide/api/auth_handlers.cpp) does, called from
 [src/app/main/main.cpp](src/app/main/main.cpp) next to the others.
 
 ### Rules for handlers
@@ -312,7 +315,7 @@ as [api/auth_handlers.cpp](src/lib/api/auth_handlers.cpp) does, called from
 Removes a file from an open transaction. These are the pieces as they are
 in the code.
 
-**1. Service** ([transaction/service.cpp](src/lib/transaction/service.cpp)).
+**1. Service** ([transaction/service.cpp](src/lib/confide/transaction/service.cpp)).
 All rules live here:
 
 ```cpp
@@ -345,14 +348,14 @@ Result<void> TransactionService::remove_file(const Caller& caller, const common:
 }
 ```
 
-**2. Handler declaration** ([api/handlers.hpp](src/lib/api/handlers.hpp)):
+**2. Handler declaration** ([api/handlers.hpp](src/lib/confide/api/handlers.hpp)):
 
 ```cpp
   // DELETE /transactions/{id}/files/{path*} -> 204
   asio::awaitable<void> remove_file(RequestContext& ctx);
 ```
 
-**3. Handler** ([api/handlers.cpp](src/lib/api/handlers.cpp)). Parse, call,
+**3. Handler** ([api/handlers.cpp](src/lib/confide/api/handlers.cpp)). Parse, call,
 answer:
 
 ```cpp

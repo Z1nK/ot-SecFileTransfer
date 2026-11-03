@@ -1,7 +1,7 @@
 // ftc send: create a transaction, upload, commit, all in one go.
 #include "commands.hpp"
-#include "local_files.hpp"
-#include "outgoing.hpp"
+#include <client/local_files.hpp>
+#include <client/outgoing.hpp>
 #include "session.hpp"
 
 #include <iostream>
@@ -28,7 +28,7 @@ Result<void> run_send(const Global& global, const po::variables_map& vm) {
 
   // The transaction stays open on failure; say which one it is.
   auto upload_all = [&]() -> Result<void> {
-    CFD_TRYV(upload_files(client, id, files));
+    CFD_TRYV(upload_files(client, id, files, print_uploaded));
     CFD_TRYV(commit_transaction(client, id));
     return {};
   };
