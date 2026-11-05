@@ -1,0 +1,26 @@
+# RPM build environment, mirrors the `build-rpm` job in .github/workflows/release.yaml.
+#   EL8: --build-arg BASE_IMAGE=almalinux:8 --build-arg DEVEL_REPO=powertools
+#   EL9: --build-arg BASE_IMAGE=almalinux:9 --build-arg DEVEL_REPO=crb
+ARG BASE_IMAGE=almalinux:9
+FROM ${BASE_IMAGE}
+
+ARG DEVEL_REPO=crb
+
+# --allowerasing: EL9 images ship curl-minimal, which conflicts with curl.
+RUN dnf -y install dnf-plugins-core \
+ && dnf config-manager --set-enabled ${DEVEL_REPO} \
+ && dnf -y install --allowerasing gcc-toolset-14 cmake ninja-build git curl zip unzip tar perl \
+      pkgconf-pkg-config openssl-devel openldap-devel rpm-build \
+ && dnf clean all
+
+ENV PATH=/opt/rh/gcc-toolset-14/root/usr/bin:${PATH}
+
+# vcpkg is baked into the image; the manifest's builtin-baseline pins the ports.
+RUN git clone https://github.com/microsoft/vcpkg.git /opt/vcpkg \
+ && /opt/vcpkg/bootstrap-vcpkg.sh -disableMetrics
+
+ENV VCPKG_ROOT=/opt/vcpkg \
+    VCPKG_DEFAULT_BINARY_CACHE=/cache/vcpkg-binary \
+    VCPKG_DOWNLOADS=/cache/vcpkg-downloads
+
+WORKDIR /work
