@@ -9,6 +9,13 @@ add_library(${LOCAL_LIB_NAME} STATIC
   token_cache.cpp
 )
 
+# Token file I/O and privacy checks: POSIX modes or Windows ACLs.
+if (WIN32)
+  target_sources(${LOCAL_LIB_NAME} PRIVATE token_cache_win.cpp)
+else()
+  target_sources(${LOCAL_LIB_NAME} PRIVATE token_cache_posix.cpp)
+endif()
+
 add_library(${PROJECT_NAMESPACE}::client-static ALIAS ${LOCAL_LIB_NAME})
 
 set_property(TARGET ${LOCAL_LIB_NAME} PROPERTY POSITION_INDEPENDENT_CODE ON)

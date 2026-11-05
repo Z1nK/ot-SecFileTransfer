@@ -14,6 +14,13 @@ target_sources(${LOCAL_EXE_NAME} PRIVATE
   commands/send.cpp
 )
 
+# Terminal (hidden password, isatty) and OS account: one file per OS.
+if (WIN32)
+  target_sources(${LOCAL_EXE_NAME} PRIVATE platform_win.cpp)
+else()
+  target_sources(${LOCAL_EXE_NAME} PRIVATE platform_posix.cpp)
+endif()
+
 # commands/ includes the headers next to main.cpp by their bare names.
 target_include_directories(${LOCAL_EXE_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 

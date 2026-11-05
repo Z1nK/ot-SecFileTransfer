@@ -56,6 +56,11 @@ set(Boost_USE_STATIC_LIBS ON)
 if(WIN32)
   add_compile_definitions(_WIN32_WINNT=0x0A00)
 endif()
+# MSVC: Beast/Asio objects exceed the default section limit (/bigobj), and
+# sources and literals are UTF-8, not the ANSI code page (/utf-8).
+if(MSVC)
+  add_compile_options(/bigobj /utf-8)
+endif()
 find_package(Boost 1.83 REQUIRED COMPONENTS json program_options)
 if(NOT Boost_FOUND)
   message(FATAL_ERROR "Boost library not found")

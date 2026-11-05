@@ -15,16 +15,19 @@ using net::ServerUrl;
 // The user token `ftc login` got from one server, for one user, kept in
 //
 //   $XDG_STATE_HOME/ftc/tokens/<user>@<host>_<port>   (~/.local/state if unset)
+//   %LOCALAPPDATA%\ftc\tokens\<user>@<host>_<port>    (Windows)
 //
 // and the admin token of `ftc admin login` next to it, in the same file
 // name with ".admin" appended.
 //
-// The folders are created 0700 and the file 0600. Like ssh with its keys,
-// a token file or folder that others could read or replace is refused
-// rather than used.
+// The folders are created 0700 and the file 0600 (on Windows: owned by the
+// user, with an ACL for that user only). Like ssh with its keys, a token
+// file or folder that others could read or replace is refused rather than
+// used.
 class TokenCache {
 public:
-  // `validation` if neither XDG_STATE_HOME nor HOME is set.
+  // `validation` if neither XDG_STATE_HOME nor HOME (Windows: LOCALAPPDATA)
+  // is set.
   static Result<TokenCache> for_server(const ServerUrl& url, std::string_view user,
                                        bool admin = false);
 

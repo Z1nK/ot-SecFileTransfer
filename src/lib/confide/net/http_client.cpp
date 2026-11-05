@@ -23,6 +23,18 @@ namespace confide::net {
 
 namespace json = boost::json;
 
+namespace {
+
+// beast::file::open takes a char path: as is on POSIX, read as UTF-8 and
+// widened on Windows (where path::c_str() is wchar_t). u8string() is the
+// UTF-8 form on both; string() would be the ANSI code page on Windows.
+std::string utf8_path(const std::filesystem::path& p) {
+  auto u8 = p.u8string();
+  return {u8.begin(), u8.end()};  // char8_t -> char, same bytes
+}
+
+}  // namespace
+
 HttpClient::HttpClient(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
 HttpClient::HttpClient(HttpClient&&) noexcept = default;
 HttpClient& HttpClient::operator=(HttpClient&&) noexcept = default;
@@ -138,7 +150,7 @@ Result<std::string> HttpClient::upload(std::string_view target, const std::files
       req.set(http::field::content_type, "application/octet-stream");
       req.set(kChecksumHeader, sha256.to_hex());
       beast::error_code ec;
-      req.body().open(file.c_str(), beast::file_mode::scan, ec);
+      req.body().open(utf8_path(file).c_str(), beast::file_mode::scan, ec);
       if (ec) {
         return fail(ErrCode::io, std::format("{}: {}", file.string(), ec.message()));
       }
@@ -192,7 +204,7 @@ Result<void> HttpClient::download(std::string_view target, const std::filesystem
       http::response_parser<http::file_body> parser{std::move(head)};
       parser.body_limit(boost::none);
       beast::error_code ec;
-      parser.get().body().open(out.c_str(), beast::file_mode::write, ec);
+      parser.get().body().open(utf8_path(out).c_str(), beast::file_mode::write, ec);
       if (ec) {
         return fail(ErrCode::io, std::format("{}: {}", out.string(), ec.message()));
       }
