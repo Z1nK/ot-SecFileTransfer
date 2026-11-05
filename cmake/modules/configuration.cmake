@@ -52,6 +52,10 @@ endif()
 # 1.83+ for asio::as_tuple with C++20 coroutines.
 # Boost.ProgramOptions: command line of the ftc client.
 set(Boost_USE_STATIC_LIBS ON)
+# Asio needs the target Windows version: Windows 10 and later.
+if(WIN32)
+  add_compile_definitions(_WIN32_WINNT=0x0A00)
+endif()
 find_package(Boost 1.83 REQUIRED COMPONENTS json program_options)
 if(NOT Boost_FOUND)
   message(FATAL_ERROR "Boost library not found")
