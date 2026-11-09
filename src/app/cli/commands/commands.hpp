@@ -32,6 +32,7 @@ extern const Command kLogout;
 
 // commands/send.cpp
 extern const Command kSend;
+extern const Command kRecent;
 
 // commands/compose.cpp
 extern const Command kCreate;

@@ -97,6 +97,10 @@ if ftc_as alice siteA send --to bob@siteZ "$src/a.txt" 2>"$WORK/err.txt"; then
 fi
 grep -q unknown_destination "$WORK/err.txt" || die "unexpected error: $(cat "$WORK/err.txt")"
 
+# Only the sends that worked are remembered, most recent first.
+recent=$(ftc_as alice siteA recent | paste -sd ' ')
+[[ $recent == "bob@siteB carol" ]] || die "ftc recent gave '$recent', want 'bob@siteB carol'"
+
 # --- 5. Peer down, then back -------------------------------------------------
 log "5. siteB down: transaction waits, then is delivered"
 site_stop siteB

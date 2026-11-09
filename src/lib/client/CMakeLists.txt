@@ -5,6 +5,7 @@ set(LOCAL_LIB_NAME client)
 add_library(${LOCAL_LIB_NAME} STATIC
   local_files.cpp
   outgoing.cpp
+  recent_recipients.cpp
   reply.cpp
   token_cache.cpp
 )

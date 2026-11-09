@@ -10,11 +10,7 @@
 
 namespace confide::client {
 
-namespace {
-
-// Percent-encodes everything but [A-Za-z0-9.-], so a user or host name
-// can't add path parts and the '@' and '_' separators stay unambiguous.
-std::string file_part(std::string_view text) {
+std::string detail::file_part(std::string_view text) {
   constexpr std::string_view kHex = "0123456789ABCDEF";
   std::string out;
   for (const char c : text) {
@@ -31,13 +27,14 @@ std::string file_part(std::string_view text) {
   return out;
 }
 
-}  // namespace
+std::string detail::server_file_name(const ServerUrl& url, std::string_view user) {
+  return std::format("{}@{}_{}", file_part(user), file_part(url.host), url.port);
+}
 
 Result<TokenCache> TokenCache::for_server(const ServerUrl& url, std::string_view user, bool admin) {
   CFD_TRY(state, detail::state_dir());
   return TokenCache(state / "ftc" / "tokens"
-                    / std::format("{}@{}_{}{}", file_part(user), file_part(url.host), url.port,
-                                  admin ? ".admin" : ""));
+                    / (detail::server_file_name(url, user) + (admin ? ".admin" : "")));
 }
 
 }  // namespace confide::client

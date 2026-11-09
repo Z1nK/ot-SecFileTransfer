@@ -20,6 +20,8 @@ constexpr std::string_view kCommands = R"(Commands:
   send --to USER[@SERVER] [--retention DAYS] [--comment TEXT] PATH...
                         create a transaction, upload the files and folders,
                         commit
+  recent                print the last recipients of 'send', one per
+                        line, most recent first (no server access)
   create --to USER[@SERVER] [--retention DAYS] [--comment TEXT]
                         create an open transaction and print its ID;
                         then add files and commit it in separate steps
@@ -42,7 +44,7 @@ Run 'ftc COMMAND --help' for the options of a command.
 )";
 
 const std::array kAll{
-    &kLogin, &kLogout, &kSend, &kCreate, &kAdd,   &kRm,
+    &kLogin, &kLogout, &kSend, &kRecent, &kCreate, &kAdd, &kRm,
     &kCommit, &kInbox, &kOutbox, &kShow, &kFiles, &kGet,
 };
 
