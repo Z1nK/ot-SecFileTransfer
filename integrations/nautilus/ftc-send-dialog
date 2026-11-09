@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# Send files and folders with ftc from a desktop: asks for the recipient
+# (recent ones from `ftc recent` in an editable list), logs in if needed and
+# runs `ftc send`, with zenity dialogs instead of a terminal.
+#
+#   ftc-send-dialog PATH...
+#
+# Started by the Nautilus extension (ftc_nautilus.py). Also works as a
+# Nautilus script (~/.local/share/nautilus/scripts/): without arguments it
+# takes NAUTILUS_SCRIPT_SELECTED_FILE_PATHS.
+#
+# ftc gets its server and user from FTC_SERVER / FTC_USER / FTC_CA_FILE, as
+# on the command line; see integrations/README.md for setting them in the
+# desktop session. FTC_BIN picks another ftc binary.
+
+set -uo pipefail
+
+FTC=${FTC_BIN:-ftc}
+TITLE="Send with ftc"
+
+error() {
+  zenity --error --no-markup --title="$TITLE" --text="$1" 2>/dev/null
+  exit 1
+}
+
+command -v zenity >/dev/null || {
+  echo "ftc-send-dialog: zenity is not installed" >&2
+  exit 1
+}
+command -v "$FTC" >/dev/null || error "ftc is not installed (or not in PATH)."
+[[ -n ${FTC_SERVER:-} ]] || error "No ftc server configured.
+
+Set FTC_SERVER for the desktop session, e.g. in
+~/.config/environment.d/ftc.conf:
+
+  FTC_SERVER=https://ftc.example.org:8443
+
+then log out and in again."
+
+# The paths: arguments, or the Nautilus script variable (one per line).
+paths=("$@")
+if ((${#paths[@]} == 0)) && [[ -n ${NAUTILUS_SCRIPT_SELECTED_FILE_PATHS:-} ]]; then
+  mapfile -t paths <<<"${NAUTILUS_SCRIPT_SELECTED_FILE_PATHS%$'\n'}"
+fi
+((${#paths[@]} > 0)) || error "Nothing selected to send (only local files and folders can be sent)."
+
+if ((${#paths[@]} == 1)); then
+  what=$(basename -- "${paths[0]}")
+else
+  what="${#paths[@]} items"
+fi
+
+# Recipient: extra arguments to `zenity --entry` make an editable list, so a
+# recent one can be picked or a new one typed. The first is preselected.
+mapfile -t recent < <("$FTC" recent 2>/dev/null)
+to=$(zenity --entry --title="$TITLE" --text="Send $what to (USER or USER@SERVER):" \
+  "${recent[@]}" 2>/dev/null) || exit 0
+to=${to#"${to%%[![:space:]]*}"}  # trim
+to=${to%"${to##*[![:space:]]}"}
+[[ -n $to ]] || exit 0
+
+work=$(mktemp -d "${TMPDIR:-/tmp}/ftc-send.XXXXXX") || error "Can't create a temporary folder."
+trap 'rm -rf "$work"' EXIT
+
+# Runs `ftc send` behind a pulsating progress dialog; its output lands in
+# $work/out and $work/err, its exit code is returned.
+send() {
+  (
+    "$FTC" send --to "$to" "${paths[@]}" </dev/null >"$work/out" 2>"$work/err"
+    echo $? >"$work/rc"
+  ) | zenity --progress --pulsate --auto-close --no-cancel --title="$TITLE" \
+    --text="Sending $what to $to…" 2>/dev/null
+  return "$(cat "$work/rc" 2>/dev/null || echo 1)"
+}
+
+# No token yet ("no password": ftc found nothing to log in with) or an
+# expired one ("[auth]"): ask for the password and try once more.
+needs_login() { grep -qE '\[auth\]|no password' "$work/err"; }
+
+login() {
+  local user=${FTC_USER:-$(id -un)} pw
+  pw=$(zenity --password --title="ftc login: $user on $FTC_SERVER" 2>/dev/null) || exit 0
+  # ftc reads the password from the first line of stdin when it is not a
+  # terminal; a pipe keeps it out of `ps` and the environment.
+  if ! printf '%s\n' "$pw" | "$FTC" login >/dev/null 2>"$work/err"; then
+    error "Login failed:
+$(cat "$work/err")"
+  fi
+}
+
+if ! send; then
+  needs_login || error "Sending failed:
+$(cat "$work/err")"
+  login
+  send || error "Sending failed:
+$(cat "$work/err")"
+fi
+
+# "committed <id> (N files)"
+summary=$(grep -m1 '^committed ' "$work/out" | sed 's/^committed //')
+if command -v notify-send >/dev/null; then
+  notify-send --app-name=ftc "Sent to $to" "$what — transaction $summary"
+else
+  zenity --info --no-markup --title="$TITLE" --text="Sent $what to $to.
+Transaction $summary" 2>/dev/null
+fi
