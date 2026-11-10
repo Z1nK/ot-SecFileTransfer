@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+# Download received transactions with ftc from a desktop: lists the inbox
+# (`ftc inbox`) in a dialog, logs in if needed and runs `ftc get` for the
+# chosen transactions, with zenity dialogs instead of a terminal.
+#
+#   ftc-get-dialog [DIR]
+#
+# Files go into DIR (default: the current folder), keeping their paths in the
+# transaction. Started by the Nautilus extension (ftc_nautilus.py) with the
+# folder that was right-clicked. Also works as a Nautilus script
+# (~/.local/share/nautilus/scripts/): without arguments it takes the selected
+# folder, or else the folder the script runs in.
+#
+# ftc gets its server and user from FTC_SERVER / FTC_USER / FTC_CA_FILE, as
+# on the command line; see integrations/README.md for setting them in the
+# desktop session. FTC_BIN picks another ftc binary.
+
+set -uo pipefail
+
+FTC=${FTC_BIN:-ftc}
+TITLE="Get with ftc"
+
+error() {
+  zenity --error --no-markup --title="$TITLE" --text="$1" 2>/dev/null
+  exit 1
+}
+
+command -v zenity >/dev/null || {
+  echo "ftc-get-dialog: zenity is not installed" >&2
+  exit 1
+}
+command -v "$FTC" >/dev/null || error "ftc is not installed (or not in PATH)."
+[[ -n ${FTC_SERVER:-} ]] || error "No ftc server configured.
+
+Set FTC_SERVER for the desktop session, e.g. in
+~/.config/environment.d/ftc.conf:
+
+  FTC_SERVER=https://ftc.example.org:8443
+
+then log out and in again."
+
+# The target folder: the argument, a single folder selected when run as a
+# Nautilus script, or the current folder (Nautilus runs scripts in the folder
+# being shown).
+dir=${1:-}
+if [[ -z $dir && -n ${NAUTILUS_SCRIPT_SELECTED_FILE_PATHS:-} ]]; then
+  mapfile -t sel <<<"${NAUTILUS_SCRIPT_SELECTED_FILE_PATHS%$'\n'}"
+  ((${#sel[@]} == 1)) && [[ -d ${sel[0]} ]] && dir=${sel[0]}
+fi
+dir=${dir:-$PWD}
+[[ -d $dir ]] || error "$dir is not a folder."
+[[ -w $dir ]] || error "Can't write into $dir."
+
+work=$(mktemp -d "${TMPDIR:-/tmp}/ftc-get.XXXXXX") || error "Can't create a temporary folder."
+trap 'rm -rf "$work"' EXIT
+
+# Runs ftc ARGS... behind a pulsating progress dialog showing TEXT; its
+# output lands in $work/out and $work/err, its exit code is returned.
+run() {
+  local text=$1
+  shift
+  (
+    "$FTC" "$@" </dev/null >"$work/out" 2>"$work/err"
+    echo $? >"$work/rc"
+  ) | zenity --progress --pulsate --auto-close --no-cancel --title="$TITLE" \
+    --text="$text" 2>/dev/null
+  return "$(cat "$work/rc" 2>/dev/null || echo 1)"
+}
+
+# No token yet ("no password": ftc found nothing to log in with) or an
+# expired one ("[auth]").
+needs_login() { grep -qE '\[auth\]|no password' "$work/err"; }
+
+login() {
+  local user=${FTC_USER:-$(id -un)} pw
+  pw=$(zenity --password --title="ftc login: $user on $FTC_SERVER" 2>/dev/null) || exit 0
+  # ftc reads the password from the first line of stdin when it is not a
+  # terminal; a pipe keeps it out of `ps` and the environment.
+  if ! printf '%s\n' "$pw" | "$FTC" login >/dev/null 2>"$work/err"; then
+    error "Login failed:
+$(cat "$work/err")"
+  fi
+}
+
+# The inbox, logging in first if needed. Later commands reuse the token.
+if ! run "Reading the inbox…" inbox; then
+  needs_login || error "Reading the inbox failed:
+$(cat "$work/err")"
+  login
+  run "Reading the inbox…" inbox || error "Reading the inbox failed:
+$(cat "$work/err")"
+fi
+
+# `ftc inbox`: a header, then
+#   ID  STATE  FROM  FILES  BYTES  CREATED  COMMENT...
+# All columns but the comment are without spaces. Only committed and
+# delivered transactions can be downloaded (open ones are not finished,
+# expired ones are gone).
+rows=()
+while read -r id state from files bytes created comment; do
+  [[ $state == committed || $state == delivered ]] || continue
+  rows+=(FALSE "$from" "${created/T/ }" "$files" "$(numfmt --to=iec --suffix=B "$bytes" 2>/dev/null || echo "$bytes")" \
+    "$state" "$comment" "$id")
+done < <(tail -n +2 "$work/out")
+((${#rows[@]} > 0)) || {
+  zenity --info --no-markup --title="$TITLE" --text="Nothing to download: your inbox is empty." 2>/dev/null
+  exit 0
+}
+
+# The ID is the last, hidden column and what --print-column returns.
+chosen=$(zenity --list --checklist --title="$TITLE" --width=900 --height=450 \
+  --text="Download into $dir:" --separator=$'\n' \
+  --column="" --column="From" --column="Created (UTC)" --column="Files" --column="Size" \
+  --column="State" --column="Comment" --column="ID" \
+  --print-column=8 --hide-column=8 "${rows[@]}" 2>/dev/null) || exit 0
+mapfile -t ids <<<"$chosen"
+[[ -n ${ids[0]:-} ]] || exit 0
+
+total=0 done_ids=()
+for id in "${ids[@]}"; do
+  [[ -n $id ]] || continue
+  args=(get "$id" "$dir")
+  if ! run "Downloading transaction $id…" "${args[@]}"; then
+    # "PATH exists (use --force to overwrite)": ask once per transaction.
+    if grep -q 'use --force' "$work/err"; then
+      zenity --question --no-markup --title="$TITLE" --ok-label="Overwrite" --cancel-label="Skip" \
+        --text="$(sed 's/^ftc get: //; s/ (use --force to overwrite)//' "$work/err" | head -n1).
+
+Overwrite the existing files of transaction $id?" 2>/dev/null || continue
+      args+=(--force)
+      run "Downloading transaction $id…" "${args[@]}" || error "Downloading $id failed:
+$(cat "$work/err")"
+    else
+      error "Downloading $id failed:
+$(cat "$work/err")"
+    fi
+  fi
+  # "downloaded N files into DIR"
+  n=$(grep -m1 '^downloaded ' "$work/out" | awk '{print $2}')
+  total=$((total + ${n:-0}))
+  done_ids+=("$id")
+done
+
+((${#done_ids[@]} > 0)) || exit 0
+if ((${#done_ids[@]} == 1)); then
+  what="transaction ${done_ids[0]}"
+else
+  what="${#done_ids[@]} transactions"
+fi
+if command -v notify-send >/dev/null; then
+  notify-send --app-name=ftc "Downloaded $total files" "$what into $dir"
+else
+  zenity --info --no-markup --title="$TITLE" --text="Downloaded $total files ($what) into $dir." 2>/dev/null
+fi

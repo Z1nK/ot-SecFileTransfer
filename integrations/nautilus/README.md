@@ -1,13 +1,21 @@
-# Nautilus: "Send with ftc…"
+# Nautilus: "Send with ftc…" and "Get with ftc…"
 
-Right-click files or folders → **Send with ftc…** → pick a recent recipient
-or type one → the files are sent with `ftc send`. If there is no valid token,
-a password dialog comes first.
+- **Send:** right-click files or folders → **Send with ftc…** → pick a recent
+  recipient or type one → the files are sent with `ftc send`.
+- **Get:** right-click the empty space of a folder → **Get with ftc…** (or
+  right-click a folder → **Get with ftc into folder…**) → tick transactions
+  from your inbox → they are downloaded with `ftc get` into that folder,
+  keeping their paths. Only committed and delivered transactions are listed.
+  If a file already exists, a dialog asks whether to overwrite it or skip
+  that transaction.
+
+If there is no valid token, a password dialog comes first.
 
 | File               | What it does |
 |--------------------|--------------|
-| `ftc-send-dialog`  | All the logic (bash + zenity): recipient dialog, login, `ftc send`, result notification. |
-| `ftc_nautilus.py`  | Nautilus extension: adds the menu item and starts `ftc-send-dialog` with the selected paths. |
+| `ftc-send-dialog`  | Send logic (bash + zenity): recipient dialog, login, `ftc send`, result notification. |
+| `ftc-get-dialog`   | Get logic (bash + zenity): inbox list, login, `ftc get`, overwrite question, result notification. |
+| `ftc_nautilus.py`  | Nautilus extension: adds the menu items and starts the dialogs with the selected paths or the current folder. |
 
 ## Needs
 
@@ -58,14 +66,16 @@ dnf info nautilus-python               # is it available?
 
 ## Install
 
-From the `confide-client` package, both files are already in place
-(`/usr/bin/ftc-send-dialog`, `/usr/share/nautilus-python/extensions/`);
+From the `confide-client` package, all files are already in place
+(`/usr/bin/ftc-send-dialog`, `/usr/bin/ftc-get-dialog`,
+`/usr/share/nautilus-python/extensions/`);
 only restart Nautilus: `nautilus -q`.
 
 By hand, for one user:
 
 ```sh
 install -Dm755 ftc-send-dialog ~/.local/bin/ftc-send-dialog
+install -Dm755 ftc-get-dialog ~/.local/bin/ftc-get-dialog
 install -Dm644 ftc_nautilus.py ~/.local/share/nautilus-python/extensions/ftc_nautilus.py
 nautilus -q
 ```
@@ -75,27 +85,34 @@ once the folder exists at login).
 
 ### Without nautilus-python
 
-Use the helper as a Nautilus script; it then shows under right-click →
+Use the helpers as Nautilus scripts; they then show under right-click →
 **Scripts**:
 
 ```sh
 install -Dm755 ftc-send-dialog ~/.local/share/nautilus/scripts/"Send with ftc"
+install -Dm755 ftc-get-dialog ~/.local/share/nautilus/scripts/"Get with ftc"
 ```
+
+"Get with ftc" downloads into the selected folder if exactly one folder is
+selected, else into the folder being shown.
 
 ## Uninstall
 
 ```sh
-rm ~/.local/bin/ftc-send-dialog \
+rm ~/.local/bin/ftc-send-dialog ~/.local/bin/ftc-get-dialog \
    ~/.local/share/nautilus-python/extensions/ftc_nautilus.py \
-   ~/.local/share/nautilus/scripts/"Send with ftc"
+   ~/.local/share/nautilus/scripts/"Send with ftc" \
+   ~/.local/share/nautilus/scripts/"Get with ftc"
 nautilus -q
 ```
 
 ## Troubleshooting
 
 - **No menu item:** run `nautilus -q; nautilus` in a terminal and look for
-  Python errors. The item is hidden when `ftc-send-dialog` is not in `PATH`
-  or the selection has non-local (e.g. network) files.
+  Python errors. An item is hidden when its helper (`ftc-send-dialog`,
+  `ftc-get-dialog`) is not in `PATH`, or the selection or folder is not
+  local (e.g. network files).
 - **"No ftc server configured":** `FTC_SERVER` is not in the session
   environment; see [../README.md](../README.md).
-- **Test the dialog without Nautilus:** `ftc-send-dialog some-file`.
+- **Test the dialogs without Nautilus:** `ftc-send-dialog some-file`,
+  `ftc-get-dialog ~/Downloads`.

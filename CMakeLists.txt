@@ -40,10 +40,11 @@ install(FILES packaging/confide-server.service
         DESTINATION lib/systemd/system COMPONENT server)
 
 # Desktop integration of ftc (integrations/): the GNOME Files menu item and
-# the dialog it starts. Only useful with zenity and nautilus-python, which
+# the dialogs they start. Only useful with zenity and nautilus-python, which
 # are suggested, not required, so ftc still installs on headless machines.
 if(UNIX AND NOT APPLE)
   install(PROGRAMS integrations/nautilus/ftc-send-dialog
+                   integrations/nautilus/ftc-get-dialog
           DESTINATION bin COMPONENT client)
   install(FILES integrations/nautilus/ftc_nautilus.py
           DESTINATION share/nautilus-python/extensions COMPONENT client)

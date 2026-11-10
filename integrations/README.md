@@ -6,7 +6,7 @@ integrations only collect the selected paths and the recipient.
 
 | Folder       | Desktop        | Status |
 |--------------|----------------|--------|
-| `nautilus/`  | GNOME Files    | right-click → "Send with ftc…" |
+| `nautilus/`  | GNOME Files    | right-click → "Send with ftc…", "Get with ftc…" |
 | `explorer/`  | Windows        | planned |
 
 They use two `ftc` commands meant for front ends:

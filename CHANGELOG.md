@@ -9,6 +9,13 @@ Each release is split into two parts:
 - **Business logic**: what users and administrators see — features, rules, API and CLI behaviour, configuration options.
 - **Technical**: internals — code structure, build, packaging, CI, tests, tooling.
 
+## [Unreleased]
+
+### Business logic
+
+#### Added
+- **GNOME Files (Nautilus): "Get with ftc…"** on the background of a folder (and "Get with ftc into folder…" on a selected folder) opens a dialog (`ftc-get-dialog`, zenity) that lists the downloadable transactions of the inbox (committed and delivered), logs in if needed and runs `ftc get` for the chosen ones into that folder. Existing files are overwritten only after asking. Installed with the client package as `bin/ftc-get-dialog`.
+
 ## [0.7.6] — 2026-11-10
 
 ### Business logic
