@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 
 # Release builds get the version from the git tag: CI turns tag vX.Y.Z into
 # -DAPP_VERSION=X.Y.Z. Local builds keep the 0.0.0 default.
-set(APP_VERSION "0.7.5" CACHE STRING "Application version X.Y.Z, set by CI from the git tag")
+set(APP_VERSION "0.7.6" CACHE STRING "Application version X.Y.Z, set by CI from the git tag")
 if(NOT APP_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
   message(FATAL_ERROR "APP_VERSION '${APP_VERSION}' is not X.Y.Z")
 endif()
@@ -39,6 +39,16 @@ install(FILES config/server.example.toml
 install(FILES packaging/confide-server.service
         DESTINATION lib/systemd/system COMPONENT server)
 
+# Desktop integration of ftc (integrations/): the GNOME Files menu item and
+# the dialog it starts. Only useful with zenity and nautilus-python, which
+# are suggested, not required, so ftc still installs on headless machines.
+if(UNIX AND NOT APPLE)
+  install(PROGRAMS integrations/nautilus/ftc-send-dialog
+          DESTINATION bin COMPONENT client)
+  install(FILES integrations/nautilus/ftc_nautilus.py
+          DESTINATION share/nautilus-python/extensions COMPONENT client)
+endif()
+
 # -----------------------------------------------------------------------------
 # Packaging: one .deb/.rpm per install() COMPONENT
 #   server -> confide         (confide-server)
@@ -64,6 +74,8 @@ set(CPACK_DEBIAN_CLIENT_PACKAGE_NAME confide-client)
 set(CPACK_COMPONENT_SERVER_DESCRIPTION "Confide secure file transfer server")
 set(CPACK_COMPONENT_UTILS_DESCRIPTION "Confide administration tools (confide-passwd)")
 set(CPACK_COMPONENT_CLIENT_DESCRIPTION "Confide command line client (ftc)")
+# For integrations/nautilus only; ftc itself needs neither.
+set(CPACK_DEBIAN_CLIENT_PACKAGE_SUGGESTS "zenity, libnotify-bin, python3-nautilus")
 
 # <name>_<version>_<arch>.deb, and Depends: filled from the linked shared
 # libraries (needs dpkg-shlibdeps).
@@ -90,6 +102,10 @@ set(CPACK_RPM_PACKAGE_RELEASE 1)
 set(CPACK_RPM_PACKAGE_RELEASE_DIST ON)
 set(CPACK_RPM_PACKAGE_LICENSE "Proprietary")
 set(CPACK_RPM_PACKAGE_AUTOREQ ON)
+set(CPACK_RPM_CLIENT_PACKAGE_SUGGESTS "zenity, libnotify, nautilus-python")
+# ftc_nautilus.py is loaded by Nautilus, not a Python module: don't byte-compile
+# it into __pycache__ files that the generated file list doesn't have.
+set(CPACK_RPM_SPEC_MORE_DEFINE "%define _python_bytecompile_extra 0")
 
 # confide: same as the .deb. The confide user is made in %pre so that the
 # files below can belong to its group.

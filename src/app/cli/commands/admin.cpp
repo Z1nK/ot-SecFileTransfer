@@ -2,11 +2,11 @@
 // Uses its own admin token (POST /admin/token), kept apart from the user
 // token, so `ftc login` alone never grants admin rights.
 #include "commands.hpp"
-#include "reply.hpp"
+#include <client/reply.hpp>
+#include "platform.hpp"
 #include "session.hpp"
 
 #include <common/time.hpp>
-#include <unistd.h>
 
 #include <boost/beast/http/verb.hpp>
 
@@ -185,7 +185,7 @@ void delete_options(po::options_description& desc, po::options_description& hidd
 
 // Asks on the terminal; refuses without one, so a script must say --yes.
 Result<void> confirm(const std::string& question) {
-  if (isatty(STDIN_FILENO) == 0) {
+  if (!stdin_is_terminal()) {
     return fail(ErrCode::validation, "not a terminal: add --yes to confirm");
   }
   std::cerr << question << " [y/N] ";

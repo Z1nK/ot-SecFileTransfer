@@ -9,9 +9,33 @@ Each release is split into two parts:
 - **Business logic**: what users and administrators see — features, rules, API and CLI behaviour, configuration options.
 - **Technical**: internals — code structure, build, packaging, CI, tests, tooling.
 
-## [Unreleased] — HEAD
+## [0.7.6] — 2026-11-10
 
-Changes since `v0.7.0`, not tagged yet.
+### Business logic
+
+#### Changed
+- File I/O, password checks (LDAP) and transaction storage access run on a separate thread pool, so a slow disk, a long `fsync` or a slow directory server no longer stops the server from accepting and serving other requests. New option `rest.blocking_threads` (default `0` = 2 × CPU cores, at least 4).
+- `ftc --user` defaults to the account `ftc` runs as (from the system user database, so LDAP accounts too; not from `$USER`). `--user` and `FTC_USER` still take precedence.
+
+#### Added
+- `ftc recent`: prints the last recipients of `ftc send` (newest first, at most 10), without contacting the server. The list is kept per server and user next to the token cache (`$XDG_STATE_HOME/ftc/recent/`, default `~/.local/state/ftc/recent/`; `%LOCALAPPDATA%\ftc\recent\` on Windows). A successful `send` adds its recipient; failing to update the list is only a warning.
+- **GNOME Files (Nautilus) integration**: right-click → "Send with ftc…" on files and folders opens a dialog (`ftc-send-dialog`, zenity) that offers the recent recipients, logs in if needed and runs `ftc send`. Installed with the client package on Linux (`bin/ftc-send-dialog`, `share/nautilus-python/extensions/ftc_nautilus.py`); `zenity`, `libnotify` and `nautilus-python` are suggested, not required. See [integrations/README.md](integrations/README.md).
+- **Windows client**: `ftc` builds and runs on Windows. Tokens are kept in `%LOCALAPPDATA%\ftc\tokens`, owned by the user with a protected DACL that grants only that user (the equivalent of `0700`/`0600` on POSIX); a folder or file open to other accounts is refused. Password input is hidden on the Windows console too. LDAP is not built on Windows.
+
+### Technical
+
+#### Changed
+- `api::offload(pool, fn)` ([api/blocking.hpp](src/lib/confide/api/blocking.hpp)) runs a blocking call on the server's `blocking` pool and resumes the coroutine on its strand; handlers get the pool as `RequestContext::blocking`. Used for authentication, uploads and downloads (begin, chunks, finish), transaction create, remove-file, commit and receive, the admin handlers, and the transaction repository methods.
+- Library layout: the server libraries moved under `src/lib/confide/`, and the client-side parts of `ftc` (`local_files`, `outgoing`, `reply`, `token_cache`) moved out of `src/app/cli/` into a new library `src/lib/client/` (namespace `confide::client`), so other front ends can reuse them.
+- `TransactionService` split from one `service.cpp` into `service/{admin,jobs,peer,reading,sender}.cpp`, with shared helpers in `service/detail.hpp` and the data types in `service_types.hpp`.
+- Platform-specific code isolated: `src/app/cli/platform.hpp` (terminal check, hidden input, current user) with `platform_posix.cpp` / `platform_win.cpp`; `TokenCache` split into `token_cache_posix.cpp` / `token_cache_win.cpp` with common parts in `token_cache_detail.hpp`. `HttpClient` handles file paths as UTF-8 on all platforms.
+
+#### Added
+- CMake presets `x64-debug-windows` / `x64-release-windows` (Ninja, MSVC, vcpkg triplet `x64-windows-static-md`, `WITH_LDAP=OFF`); `_WIN32_WINNT=0x0A00` defined for Asio.
+- [docker/builders/build-rpm.sh](docker/builders/build-rpm.sh) and `Dockerfile.rpm`: build and install-test the RPMs locally (Rocky Linux 8/9) from the working tree, the same way the release workflow does. Packages go to `dist/elN/`.
+- `client::RecentRecipients` with unit tests; `two_sites.sh` checks `ftc recent` after a send.
+
+## [0.7.5] — 2026-10-27
 
 ### Business logic
 
@@ -158,6 +182,9 @@ First tagged release. It also covers the early tags `1` (PR #2) and `2` (PR #3),
   - vcpkg baseline for dependencies.
 - Google Test integration with unit tests for common, auth, transaction and API modules.
 
-[Unreleased]: https://github.com/Z1nK/ot-SecFileTransfer/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/Z1nK/ot-SecFileTransfer/compare/v0.7.6...HEAD
+[0.7.6]: https://github.com/Z1nK/ot-SecFileTransfer/compare/v0.7.5...v0.7.6
+[0.7.5]: https://github.com/Z1nK/ot-SecFileTransfer/compare/v0.7.0...v0.7.5
+[0.7.0]: https://github.com/Z1nK/ot-SecFileTransfer/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Z1nK/ot-SecFileTransfer/compare/v0.1.0...v0.6.0
 [0.1.0]: https://github.com/Z1nK/ot-SecFileTransfer/releases/tag/v0.1.0

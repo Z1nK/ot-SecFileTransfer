@@ -30,7 +30,7 @@ Result<Session> open_session(const Global& global, Scope scope) {
     return fail(ErrCode::validation, "no server: use --server or FTC_SERVER");
   }
   if (global.user.empty()) {
-    return fail(ErrCode::validation, "no user: use --user or FTC_USER");
+    return fail(ErrCode::validation, "no user: use --user or FTC_USER (could not determine the OS user)");
   }
   CFD_TRY(url, net::ServerUrl::parse(global.server));
   // Without TLS anyone on the network can read the password and the token.

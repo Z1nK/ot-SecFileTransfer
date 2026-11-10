@@ -1,6 +1,6 @@
 # cppcoreguidelines-avoid-reference-coroutine-parameters is off: API handlers
 # take RequestContext& and are always co_await-ed by the server, so the
-# context outlives them (see Handler in src/lib/api/router.hpp).
+# context outlives them (see Handler in src/lib/confide/api/router.hpp).
 Checks: '-*,
 bugprone-*,
 cppcoreguidelines-*,

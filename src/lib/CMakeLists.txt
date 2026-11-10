@@ -1,14 +1,5 @@
-add_subdirectory(common)
-add_subdirectory(logging)
-add_subdirectory(config)
-add_subdirectory(auth)
-add_subdirectory(storage)
-add_subdirectory(transaction)
-add_subdirectory(retention)
-add_subdirectory(net)
-add_subdirectory(api)
-add_subdirectory(forwarder)
+# Server libraries (and the net/common pieces the client shares).
+add_subdirectory(confide)
 
-if(WITH_LDAP)
-  add_subdirectory(ldapclient)
-endif()
+# Client library for the front ends in src/app (ftc, ...).
+add_subdirectory(client)

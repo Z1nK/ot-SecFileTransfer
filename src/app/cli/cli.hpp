@@ -1,15 +1,18 @@
 #pragma once
-// Shared by the ftc sources: global options, exit codes, error and URL helpers.
+// Shared by the ftc sources: global options, exit codes, error helpers.
+#include <client/client.hpp>
 #include <common/error.hpp>
-#include <common/id.hpp>
 
 #include <filesystem>
 #include <format>
 #include <optional>
 #include <string>
-#include <utility>
 
 namespace confide::cli {
+
+// The client library (token cache, local files, replies, outgoing
+// transactions) is used unqualified throughout ftc.
+using namespace confide::client;
 
 using common::ErrCode;
 using common::Error;
@@ -26,15 +29,6 @@ struct Global {
   std::optional<std::filesystem::path> ca_file;
   bool allow_http = false;
 };
-
-inline std::unexpected<Error> fail(ErrCode code, std::string detail) {
-  return std::unexpected(Error::make(code, std::move(detail)));
-}
-
-// "/transactions/{id}", the base of every per-transaction request.
-inline std::string tx_target(const common::TransactionId& id) {
-  return "/transactions/" + id.str();
-}
 
 inline std::string describe(const Error& err) {
   return std::format("[{}] {}", common::to_string(err.code), err.detail);

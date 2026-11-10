@@ -17,6 +17,7 @@
 
 #include "cli.hpp"
 #include "dispatch.hpp"
+#include "platform.hpp"
 
 #include <boost/program_options.hpp>
 
@@ -36,7 +37,7 @@ int main(int argc, char** argv) {
   global.add_options()("help,h", "show this help")(
       "server,s", po::value<std::string>()->value_name("URL"),
       "server, e.g. https://siteA:8080 (env FTC_SERVER)")(
-      "user,u", po::value<std::string>()->value_name("NAME"), "user name (env FTC_USER)")(
+      "user,u", po::value<std::string>()->value_name("NAME"), "user name (env FTC_USER; default: current OS user)")(
       "ca-file", po::value<std::string>()->value_name("PATH"),
       "PEM CA bundle for https (env FTC_CA_FILE; default: system CAs)")(
       "allow-http", "allow a plain http:// server; the password is sent unencrypted "
@@ -97,7 +98,7 @@ int main(int argc, char** argv) {
 
   cli::Global g{
       .server = vm.contains("server") ? vm["server"].as<std::string>() : std::string{},
-      .user = vm.contains("user") ? vm["user"].as<std::string>() : std::string{},
+      .user = vm.contains("user") ? vm["user"].as<std::string>() : cli::system_user(),
       .ca_file = vm.contains("ca-file") && !vm["ca-file"].as<std::string>().empty()
                      ? std::optional<fs::path>{vm["ca-file"].as<std::string>()}
                      : std::nullopt,
