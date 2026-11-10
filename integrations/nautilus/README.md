@@ -16,6 +16,8 @@ If there is no valid token, a password dialog comes first.
 | `ftc-send-dialog`  | Send logic (bash + zenity): recipient dialog, login, `ftc send`, result notification. |
 | `ftc-get-dialog`   | Get logic (bash + zenity): inbox list, login, `ftc get`, overwrite question, result notification. |
 | `ftc_nautilus.py`  | Nautilus extension: adds the menu items and starts the dialogs with the selected paths or the current folder. |
+| `install.sh`       | Installs the above for the current user (without the package). |
+| `uninstall.sh`     | Removes what `install.sh` installed. |
 
 ## Needs
 
@@ -71,27 +73,30 @@ From the `confide-client` package, all files are already in place
 `/usr/share/nautilus-python/extensions/`);
 only restart Nautilus: `nautilus -q`.
 
-By hand, for one user:
+Without the package, for one user (no sudo), from this folder:
 
 ```sh
-install -Dm755 ftc-send-dialog ~/.local/bin/ftc-send-dialog
-install -Dm755 ftc-get-dialog ~/.local/bin/ftc-get-dialog
-install -Dm644 ftc_nautilus.py ~/.local/share/nautilus-python/extensions/ftc_nautilus.py
-nautilus -q
+./install.sh
 ```
 
-`~/.local/bin` must be in the session's `PATH` (it is on most distributions
-once the folder exists at login).
+With nautilus-python it installs the dialogs in `~/.local/bin/` and the
+extension in `~/.local/share/nautilus-python/extensions/`; without it, the
+dialogs become Nautilus scripts (see below). It then restarts Nautilus
+(`--no-restart` to skip) and warns about anything missing: zenity, `ftc`,
+`FTC_SERVER`, or `~/.local/bin` not in the session's `PATH` (it is on most
+distributions once the folder exists at login). Don't combine it with the
+package: the menu items would show twice.
 
 ### Without nautilus-python
 
-Use the helpers as Nautilus scripts; they then show under right-click →
-**Scripts**:
-
 ```sh
-install -Dm755 ftc-send-dialog ~/.local/share/nautilus/scripts/"Send with ftc"
-install -Dm755 ftc-get-dialog ~/.local/share/nautilus/scripts/"Get with ftc"
+./install.sh --scripts
 ```
+
+installs the dialogs as Nautilus scripts in
+`~/.local/share/nautilus/scripts/`; they then show under right-click →
+**Scripts** as "Send with ftc" and "Get with ftc". This is the default when
+nautilus-python is not found; `--extension` forces the extension.
 
 "Get with ftc" downloads into the selected folder if exactly one folder is
 selected, else into the folder being shown.
@@ -99,12 +104,12 @@ selected, else into the folder being shown.
 ## Uninstall
 
 ```sh
-rm ~/.local/bin/ftc-send-dialog ~/.local/bin/ftc-get-dialog \
-   ~/.local/share/nautilus-python/extensions/ftc_nautilus.py \
-   ~/.local/share/nautilus/scripts/"Send with ftc" \
-   ~/.local/share/nautilus/scripts/"Get with ftc"
-nautilus -q
+./uninstall.sh
 ```
+
+removes the files of both variants from your home and restarts Nautilus.
+Files from the `confide-client` package are left alone; remove the package
+with apt/dnf.
 
 ## Troubleshooting
 
