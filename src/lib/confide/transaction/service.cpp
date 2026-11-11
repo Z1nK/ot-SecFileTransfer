@@ -22,10 +22,23 @@ std::shared_ptr<std::mutex> TransactionService::lock_for(const common::Transacti
   return slot;
 }
 
+Result<std::shared_ptr<std::mutex>>
+TransactionService::lock_existing(const common::TransactionId& id) {
+  if (!repo_.contains(id)) {
+    return not_found(id);
+  }
+  return lock_for(id);
+}
+
+std::size_t TransactionService::lock_count() const {
+  const std::scoped_lock lock(locks_mu_);
+  return locks_.size();
+}
+
 Result<void> TransactionService::destroy(const common::TransactionId& id, BizEventType type,
                                          const Caller& actor) {
   {
-    const auto mu = lock_for(id);
+    CFD_TRY(mu, lock_existing(id));
     const std::scoped_lock lock(*mu);
 
     auto tx = repo_.find(id);

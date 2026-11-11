@@ -69,7 +69,7 @@ Result<Transaction> TransactionService::create(const Caller& caller, const Creat
 Result<PendingUpload> TransactionService::begin_upload(const Caller& caller,
                                                        const common::TransactionId& id,
                                                        const common::RelativePath& path) {
-  const auto mu = lock_for(id);
+  CFD_TRY(mu, lock_existing(id));
   const std::scoped_lock lock(*mu);
 
   const auto tx = repo_.find(id);
@@ -87,7 +87,7 @@ Result<PendingUpload> TransactionService::begin_upload(const Caller& caller,
 }
 
 Result<FileEntry> PendingUpload::finish(const std::optional<common::Sha256Digest>& expected) {
-  const auto mu = service_->lock_for(id_);
+  CFD_TRY(mu, service_->lock_existing(id_));
   const std::scoped_lock lock(*mu);
 
   auto tx = service_->repo_.find(id_);
@@ -113,7 +113,7 @@ Result<FileEntry> PendingUpload::finish(const std::optional<common::Sha256Digest
 
 Result<void> TransactionService::remove_file(const Caller& caller, const common::TransactionId& id,
                                              const common::RelativePath& path) {
-  const auto mu = lock_for(id);
+  CFD_TRY(mu, lock_existing(id));
   const std::scoped_lock lock(*mu);
 
   auto tx = repo_.find(id);
@@ -143,7 +143,7 @@ Result<Transaction> TransactionService::commit(const Caller& caller,
                                                const common::TransactionId& id) {
   std::optional<Transaction> committed;
   {
-    const auto mu = lock_for(id);
+    CFD_TRY(mu, lock_existing(id));
     const std::scoped_lock lock(*mu);
 
     auto found = repo_.find(id);

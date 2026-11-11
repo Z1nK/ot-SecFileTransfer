@@ -152,11 +152,19 @@ public:
   // `expired`.
   Result<void> expire(const common::TransactionId& id);
 
+  // Number of per-transaction mutexes held, for tests.
+  std::size_t lock_count() const;
+
 private:
   friend class PendingUpload;
 
   // Mutex of one transaction, created on first use.
   std::shared_ptr<std::mutex> lock_for(const common::TransactionId& id);
+
+  // lock_for() of a transaction that exists, `notfound` otherwise. Every call
+  // on an id from a request goes through here: lock_for() alone would keep
+  // a mutex for each id anyone ever asked about, existing or not.
+  Result<std::shared_ptr<std::mutex>> lock_existing(const common::TransactionId& id);
 
   // Marks the transaction expired, deletes it with its files and logs
   // `type` with `actor`. Shared by expire() and admin_delete().
@@ -169,7 +177,7 @@ private:
   const common::IClock& clock_;
   ServiceOptions options_;
 
-  std::mutex locks_mu_;
+  mutable std::mutex locks_mu_;
   std::unordered_map<common::TransactionId, std::shared_ptr<std::mutex>> locks_;
 };
 

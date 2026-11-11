@@ -111,6 +111,136 @@ TEST_F(GroupTargetTest, MembersReadOnceCommitted) {
   }
 }
 
+// The membership check can be a slow LDAP call. It must run once per target
+// name and without the repository lock, or one inbox listing stalls every
+// other request for as long as the directory takes to answer.
+TEST_F(GroupTargetTest, InboxAsksAboutMembershipOutsideTheRepositoryLock) {
+  int calls = 0;
+  bool repo_was_locked = false;
+  std::optional<confide::common::TransactionId> known;
+  // Kept until the end of the test: a future from std::async joins its
+  // thread when destroyed, which inside the callback would wait for the very
+  // lock being tested and hang instead of failing.
+  std::vector<std::future<bool>> probes;
+  start([&](std::string_view user, std::string_view target) {
+    ++calls;
+    // Another thread must be able to read the repository meanwhile.
+    auto& probe = probes.emplace_back(
+        std::async(std::launch::async, [&] { return repo_->find(*known).has_value(); }));
+    if (probe.wait_for(std::chrono::seconds{2}) != std::future_status::ready) {
+      repo_was_locked = true;
+    }
+    return in_devs(user, target);
+  });
+
+  for (int i = 0; i < 3; ++i) {
+    const auto tx = create_open();
+    known = tx.id;
+    ASSERT_TRUE(service_->commit(carol_, tx.id).has_value());
+  }
+
+  calls = 0;
+  EXPECT_EQ(service_->list(alice_, Box::in).size(), 3U);
+  EXPECT_EQ(calls, 1);  // three transactions, one target name
+  EXPECT_FALSE(repo_was_locked);
+
+  calls = 0;
+  EXPECT_TRUE(service_->list(dave_, Box::in).empty());
+  EXPECT_EQ(calls, 1);
+  EXPECT_FALSE(repo_was_locked);
+}
+
+// Each transaction has a mutex, kept in a map. Asking about ids that do not
+// exist must not add to it, or any user could grow it without end.
+TEST_F(GroupTargetTest, UnknownIdsLeaveNoLockBehind) {
+  const auto tx = create_open();
+  const auto before = service_->lock_count();
+  EXPECT_EQ(before, 1U);
+
+  const Caller admin{.name = "root", .is_admin = true};
+  for (int i = 0; i < 50; ++i) {
+    const auto ghost = confide::common::TransactionId::generate();
+    EXPECT_EQ(service_->commit(carol_, ghost).error().code, ErrCode::notfound);
+    EXPECT_EQ(service_->begin_upload(carol_, ghost, path_).error().code, ErrCode::notfound);
+    EXPECT_EQ(service_->remove_file(carol_, ghost, path_).error().code, ErrCode::notfound);
+    EXPECT_EQ(service_->set_retention(admin, ghost, 1).error().code, ErrCode::notfound);
+    EXPECT_EQ(service_->admin_delete(admin, ghost).error().code, ErrCode::notfound);
+    EXPECT_EQ(service_->mark_delivered(ghost).error().code, ErrCode::notfound);
+  }
+  EXPECT_EQ(service_->lock_count(), before);
+
+  // The real one still works, and its mutex goes when it is deleted.
+  ASSERT_TRUE(service_->commit(carol_, tx.id).has_value());
+  ASSERT_TRUE(service_->admin_delete(admin, tx.id).has_value());
+  EXPECT_EQ(service_->lock_count(), 0U);
+}
+
+namespace {
+
+// A directory that ignores case, as LDAP does: "Alice" is the user "alice".
+confide::common::Result<std::string> loose_directory(std::string_view user, std::string_view) {
+  std::string lower{user};
+  for (char& c : lower) {
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  }
+  if (lower != "alice") {
+    return std::unexpected(
+        confide::common::Error::make(ErrCode::unknown_destination, "no such user"));
+  }
+  return lower;
+}
+
+}  // namespace
+
+// The target is stored as the directory spells it, not as the sender typed
+// it: alice logs in as "alice" and must find what was sent to "Alice".
+TEST_F(GroupTargetTest, TargetIsStoredAsTheDirectorySpellsIt) {
+  start(in_devs, loose_directory);
+  auto tx = service_->create(carol_, CreateRequest{.target_user = "Alice", .target_server = {}});
+  ASSERT_TRUE(tx.has_value());
+  EXPECT_EQ(tx->target_user, "alice");
+  ASSERT_TRUE(service_->commit(carol_, tx->id).has_value());
+
+  const auto inbox = service_->list(alice_, Box::in);
+  ASSERT_EQ(inbox.size(), 1U);
+  EXPECT_EQ(inbox[0].id, tx->id);
+  EXPECT_TRUE(service_->get(alice_, tx->id).has_value());
+}
+
+// What a peer pushes is checked like our own input.
+TEST_F(GroupTargetTest, PeerPushIsValidated) {
+  start(in_devs, loose_directory);
+  const Caller peer{.name = "siteB", .is_peer = true};
+  const auto now = clock_.now();
+  const auto push = [&](std::string sender, std::string target, std::chrono::days keep) {
+    return service_->receive(
+        peer, confide::transaction::ReceiveRequest{.id = confide::common::TransactionId::generate(),
+                                                   .sender = std::move(sender),
+                                                   .target_user = std::move(target),
+                                                   .created_at = now,
+                                                   .expires_at = now + keep});
+  };
+
+  // Sender names follow the rule for user names: nothing that could break a
+  // one-line listing or a terminal.
+  for (const char* bad : {"eve mallory", "eve\x1b[2J", "eve@siteC", "a/b", ""}) {
+    auto r = push(bad, "alice", std::chrono::days{1});
+    ASSERT_FALSE(r.has_value()) << bad;
+    EXPECT_EQ(r.error().code, ErrCode::validation) << bad;
+  }
+
+  // The target gets the local spelling here as well.
+  auto ok = push("eve", "ALICE", std::chrono::days{1});
+  ASSERT_TRUE(ok.has_value()) << ok.error().detail;
+  EXPECT_EQ(ok->target_user, "alice");
+  EXPECT_EQ(ok->expires_at, now + std::chrono::days{1});
+
+  // max_retention_days is 7 in this fixture: a longer stay is cut to it.
+  auto forever = push("eve", "alice", std::chrono::days{3650});
+  ASSERT_TRUE(forever.has_value()) << forever.error().detail;
+  EXPECT_EQ(forever->expires_at, now + std::chrono::days{7});
+}
+
 TEST_F(GroupTargetTest, OutsidersAreForbidden) {
   const auto tx = create_open();
   ASSERT_TRUE(service_->commit(carol_, tx.id).has_value());

@@ -36,7 +36,7 @@ Result<Transaction> TransactionService::outgoing(const common::TransactionId& id
 }
 
 Result<void> TransactionService::mark_delivered(const common::TransactionId& id) {
-  const auto mu = lock_for(id);
+  CFD_TRY(mu, lock_existing(id));
   const std::scoped_lock lock(*mu);
 
   auto tx = repo_.find(id);
