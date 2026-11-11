@@ -24,6 +24,11 @@ struct LoginLimiterOptions {
   // Wait after the first failure past the limit; doubles each time.
   std::chrono::seconds base_delay{30};
   std::chrono::seconds max_delay{900};
+  // A key with no failure for this long starts over at zero. Without it the
+  // per-address count only ever grows (a success does not clear it), and an
+  // address shared by many users (NAT, proxy) ends up in backoff for good.
+  // Keep it above max_delay, or waiting out a block would reset the count.
+  std::chrono::seconds forget_after{3600};
   // Past this many keys, keys idle for max_delay are dropped.
   std::size_t max_keys = 10'000;
 };
