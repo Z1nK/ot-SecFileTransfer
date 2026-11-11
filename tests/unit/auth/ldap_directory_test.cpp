@@ -2,6 +2,10 @@
 #include <config/config.hpp>
 #include <gtest/gtest.h>
 
+#include <boost/asio/io_context.hpp>
+#include <boost/asio/ip/tcp.hpp>
+
+#include <chrono>
 #include <cstdlib>
 #include <memory>
 #include <string>
@@ -111,4 +115,26 @@ TEST(LdapDirectory, UnreachableServerIsUnavailable) {
   EXPECT_EQ(login.error().detail.find("127.0.0.1"), std::string::npos);
   EXPECT_EQ(directory->has_user("alice").error().code, ErrCode::unavailable);
   EXPECT_FALSE(directory->is_member("alice", "admins"));
+}
+
+// A server that accepts the connection and never answers costs timeout_s per
+// lookup. Only the first lookup may pay it: the next ones fail at once, or an
+// inbox listing with many group targets would hang for timeout_s each.
+TEST(LdapDirectory, SilentServerIsAskedOnlyOnce) {
+  boost::asio::io_context io;
+  boost::asio::ip::tcp::acceptor silent(
+      io, boost::asio::ip::tcp::endpoint(boost::asio::ip::make_address("127.0.0.1"), 0));
+  auto cfg = seed_ldap("ldap://127.0.0.1:" + std::to_string(silent.local_endpoint().port()));
+  cfg.timeout_s = 1;
+  auto directory = make(std::move(cfg));
+
+  const auto started = std::chrono::steady_clock::now();
+  EXPECT_EQ(directory->has_user("alice").error().code, ErrCode::unavailable);
+  for (const char* name : {"bob", "carol", "dave", "erin", "frank"}) {
+    EXPECT_EQ(directory->has_user(name).error().code, ErrCode::unavailable);
+    EXPECT_EQ(directory->has_group(name).error().code, ErrCode::unavailable);
+    EXPECT_FALSE(directory->is_member(name, "admins"));
+  }
+  // 16 lookups: 16 s without the fast path, about 1 s with it.
+  EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds{5});
 }

@@ -37,6 +37,17 @@ constexpr std::string_view kDenied = "invalid user name or password";
 constexpr std::string_view kUnavailable = "user directory unavailable";
 // Expired entries are dropped once a cache grows past this.
 constexpr std::size_t kPruneAbove = 1024;
+// After the directory did not answer, lookups fail at once for this long
+// instead of each waiting for timeout_s again: an inbox listing asks about
+// every group it meets, and every request would queue up behind a dead server.
+constexpr std::chrono::seconds kDownFor{10};
+
+// OpenLDAP client-side codes for "no answer": LDAP_SERVER_DOWN, LDAP_TIMEOUT,
+// LDAP_CONNECT_ERROR. Everything else is an answer, e.g. an ambiguous group
+// name, and says nothing about the next lookup.
+bool no_answer(int code) {
+  return code == -1 || code == -5 || code == -11;
+}
 
 std::unexpected<Error> denied() {
   return std::unexpected(Error::make(ErrCode::auth, std::string(kDenied)));
@@ -100,6 +111,9 @@ public:
       if (it != binds_.end() && fresh(it->second.at) && same(it->second.print, print)) {
         return it->second.name;
       }
+      if (down()) {
+        return unavailable();
+      }
     }
 
     ldapauth::AuthResult r;
@@ -124,13 +138,25 @@ public:
     binds_.insert_or_assign(std::string(user),
                             Bind{.print = print, .name = r.user->username, .at = now});
     prune(users_, now);
-    users_.insert_or_assign(std::string(user), UserEntry{.groups = r.user->groups, .at = now});
+    users_.insert_or_assign(
+        std::string(user),
+        UserEntry{.groups = r.user->groups, .name = r.user->username, .at = now});
     return r.user->username;
   }
 
   Result<bool> has_user(std::string_view name) const override {
-    CFD_TRY(groups, groups_of(name));
-    return groups.has_value();
+    CFD_TRY(found, lookup(name));
+    return found.groups.has_value();
+  }
+
+  // The directory matches "Alice" to the entry of "alice"; the entry's own
+  // spelling is the one verify() returns and the one to address.
+  Result<std::optional<std::string>> canonical_user(std::string_view name) const override {
+    CFD_TRY(found, lookup(name));
+    if (!found.groups) {
+      return std::nullopt;
+    }
+    return std::move(found.name);
   }
 
   Result<bool> has_group(std::string_view name) const override {
@@ -142,6 +168,9 @@ public:
       const auto it = groups_.find(name);
       if (it != groups_.end() && fresh(it->second.at)) {
         return it->second.exists;
+      }
+      if (down()) {
+        return unavailable();
       }
     }
     bool exists = false;
@@ -158,11 +187,11 @@ public:
   }
 
   bool is_member(std::string_view user, std::string_view group) const override {
-    auto groups = groups_of(user);
-    if (!groups || !groups->has_value()) {
+    auto found = lookup(user);
+    if (!found || !found->groups) {
       return false;
     }
-    return std::ranges::any_of(**groups, [&](const auto& g) { return iequals(g, group); });
+    return std::ranges::any_of(*found->groups, [&](const auto& g) { return iequals(g, group); });
   }
 
 private:
@@ -173,6 +202,7 @@ private:
   };
   struct UserEntry {
     std::optional<std::vector<std::string>> groups;  // nullopt = no such user
+    std::string name;  // canonical, from the directory; empty if no such user
     Clock::time_point at;
   };
   struct GroupEntry {
@@ -200,31 +230,36 @@ private:
     return sha.finish();
   }
 
-  // The user's group names; nullopt if there is no such user.
-  Result<std::optional<std::vector<std::string>>> groups_of(std::string_view user) const {
+  // The user's canonical name and group names; `groups` is nullopt if there
+  // is no such user.
+  Result<UserEntry> lookup(std::string_view user) const {
     if (!config::is_valid_name(user)) {
-      return std::nullopt;
+      return UserEntry{};
     }
     {
       const std::lock_guard lock(mu_);
       const auto it = users_.find(user);
       if (it != users_.end() && fresh(it->second.at)) {
-        return it->second.groups;
+        return it->second;
+      }
+      if (down()) {
+        return unavailable();
       }
     }
-    std::optional<std::vector<std::string>> groups;
+    UserEntry entry;
     try {
       if (auto u = ldap_.findUser(std::string(user))) {
-        groups = std::move(u->groups);
+        entry.groups = std::move(u->groups);
+        entry.name = std::move(u->username);
       }
     } catch (const ldapauth::LdapError& e) {
       return failed("user lookup", user, e);
     }
-    const auto now = Clock::now();
+    entry.at = Clock::now();
     const std::lock_guard lock(mu_);
-    prune(users_, now);
-    users_.insert_or_assign(std::string(user), UserEntry{.groups = groups, .at = now});
-    return groups;
+    prune(users_, entry.at);
+    users_.insert_or_assign(std::string(user), entry);
+    return entry;
   }
 
   std::unexpected<Error> failed(std::string_view what, std::string_view name,
@@ -232,8 +267,15 @@ private:
     if (log_ != nullptr) {
       log_->error(kTag, "{} '{}': LDAP error {}: {}", what, name, e.code(), e.what());
     }
+    if (no_answer(e.code())) {
+      const std::lock_guard lock(mu_);
+      down_until_ = Clock::now() + kDownFor;
+    }
     return unavailable();
   }
+
+  // True shortly after the directory did not answer. Call with mu_ held.
+  bool down() const { return Clock::now() < down_until_; }
 
   ldapauth::LdapAuth ldap_;
   std::chrono::seconds ttl_;
@@ -244,6 +286,7 @@ private:
   mutable std::map<std::string, Bind, std::less<>> binds_;
   mutable std::map<std::string, UserEntry, std::less<>> users_;
   mutable std::map<std::string, GroupEntry, std::less<>> groups_;
+  mutable Clock::time_point down_until_{};  // see kDownFor
 };
 
 }  // namespace

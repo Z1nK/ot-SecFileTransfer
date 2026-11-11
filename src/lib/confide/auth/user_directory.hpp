@@ -4,6 +4,7 @@
 #include "logging/tech_log.hpp"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -35,6 +36,18 @@ public:
   virtual Result<std::string> verify(std::string_view user, std::string_view password) const = 0;
 
   virtual Result<bool> has_user(std::string_view name) const = 0;
+
+  // User `name` as the directory spells it, i.e. what verify() returns for
+  // them; nullopt if there is no such user. Transactions are addressed with
+  // this spelling, so a directory that matches names loosely (LDAP ignores
+  // case) must override it.
+  virtual Result<std::optional<std::string>> canonical_user(std::string_view name) const {
+    CFD_TRY(known, has_user(name));
+    if (!known) {
+      return std::nullopt;
+    }
+    return std::string{name};
+  }
   virtual Result<bool> has_group(std::string_view name) const = 0;
 
   // true if `user` is a member of group `group`. false for unknown names and

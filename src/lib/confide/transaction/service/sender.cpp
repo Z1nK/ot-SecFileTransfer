@@ -41,8 +41,10 @@ Result<Transaction> TransactionService::create(const Caller& caller, const Creat
   const bool local_target = req.target_server.empty() || req.target_server == options_.local_server;
   const std::string target_server = local_target ? std::string{} : req.target_server;
 
+  std::string target_user = req.target_user;
   if (options_.check_destination) {
-    CFD_TRYV(options_.check_destination(req.target_user, target_server));
+    CFD_TRY(canonical, options_.check_destination(req.target_user, target_server));
+    target_user = std::move(canonical);
   }
 
   const auto created = clock_.now();
@@ -52,7 +54,7 @@ Result<Transaction> TransactionService::create(const Caller& caller, const Creat
   Transaction tx{
       .id = common::TransactionId::generate(),
       .sender = caller.name,
-      .target_user = req.target_user,
+      .target_user = std::move(target_user),
       .target_server = target_server,
       .origin_server = {},
       .comment = req.comment,

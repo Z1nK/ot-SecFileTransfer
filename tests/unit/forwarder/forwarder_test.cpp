@@ -146,9 +146,9 @@ protected:
 
     site_b_ = std::make_unique<Site>(
         dir_ / "b", "siteB",
-        [](std::string_view user, std::string_view) -> Result<void> {
+        [](std::string_view user, std::string_view) -> Result<std::string> {
           if (user == "bob") {
-            return {};
+            return std::string{user};
           }
           return std::unexpected(Error::make(ErrCode::unknown_destination, "no such user"));
         },

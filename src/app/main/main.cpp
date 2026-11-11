@@ -72,16 +72,18 @@ std::string describe(const Error& err) {
 // send would reach every admin.
 transaction::DestinationCheck destination_check(const config::Config& cfg,
                                                 const auth::IUserDirectory& directory) {
-  return [&cfg, &directory](std::string_view user, std::string_view server) -> Result<void> {
+  return [&cfg, &directory](std::string_view user,
+                            std::string_view server) -> Result<std::string> {
     if (server.empty() || server == cfg.instance_name()) {
       if (!cfg.auth().admin_group.empty() && user == cfg.auth().admin_group) {
         return std::unexpected(
             Error::make(ErrCode::unknown_destination,
                         std::format("'{}' is the admin group, not a recipient", user)));
       }
-      CFD_TRY(is_user, directory.has_user(user));
-      if (is_user) {
-        return {};
+      // As the directory spells it: LDAP ignores case, the inbox does not.
+      CFD_TRY(canonical, directory.canonical_user(user));
+      if (canonical) {
+        return std::move(*canonical);
       }
       CFD_TRY(is_group, directory.has_group(user));
       if (!is_group) {
@@ -89,13 +91,13 @@ transaction::DestinationCheck destination_check(const config::Config& cfg,
             Error::make(ErrCode::unknown_destination,
                         std::format("no user or group '{}' on this server", user)));
       }
-      return {};
+      return std::string{user};  // group: membership is asked by this name
     }
     if (cfg.find_peer(server) == nullptr) {
       return std::unexpected(
           Error::make(ErrCode::unknown_destination, std::format("unknown server '{}'", server)));
     }
-    return {};
+    return std::string{user};  // the peer checks, and spells, its own users
   };
 }
 

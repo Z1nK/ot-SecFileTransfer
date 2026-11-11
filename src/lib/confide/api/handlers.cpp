@@ -148,7 +148,9 @@ asio::awaitable<void> TransactionHandlers::list(RequestContext& ctx) {
   } else {
     co_return co_await fail(ctx, Error::make(ErrCode::validation, "box must be 'in' or 'out'"));
   }
-  const auto txs = service_.list(ctx.caller, box);
+  // Off the network threads, like every call that checks who may read: for
+  // a group target that can mean asking LDAP.
+  const auto txs = co_await offload(ctx.blocking, [&] { return service_.list(ctx.caller, box); });
   co_await ctx.exchange.send(Response::json(http::status::ok, encode_transaction_list(txs)));
 }
 
@@ -157,7 +159,7 @@ asio::awaitable<void> TransactionHandlers::get(RequestContext& ctx) {
   if (!id) {
     co_return co_await fail(ctx, id.error());
   }
-  auto tx = service_.get(ctx.caller, *id);
+  auto tx = co_await offload(ctx.blocking, [&] { return service_.get(ctx.caller, *id); });
   if (!tx) {
     co_return co_await fail(ctx, tx.error());
   }
@@ -251,7 +253,7 @@ asio::awaitable<void> TransactionHandlers::list_files(RequestContext& ctx) {
   if (!id) {
     co_return co_await fail(ctx, id.error());
   }
-  auto tx = service_.get(ctx.caller, *id);
+  auto tx = co_await offload(ctx.blocking, [&] { return service_.get(ctx.caller, *id); });
   if (!tx) {
     co_return co_await fail(ctx, tx.error());
   }
@@ -275,7 +277,7 @@ asio::awaitable<void> TransactionHandlers::download(RequestContext& ctx) {
   if (!file) {
     co_return co_await fail(ctx, file.error());
   }
-  auto tx = service_.get(ctx.caller, *id);
+  auto tx = co_await offload(ctx.blocking, [&] { return service_.get(ctx.caller, *id); });
   if (!tx) {
     co_return co_await fail(ctx, tx.error());
   }

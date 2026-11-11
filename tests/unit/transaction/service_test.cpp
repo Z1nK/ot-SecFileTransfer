@@ -1,11 +1,15 @@
 #include <gtest/gtest.h>
 #include <transaction/service.hpp>
 
+#include <cctype>
+#include <chrono>
 #include <filesystem>
+#include <future>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 using confide::common::ErrCode;
 using confide::common::RelativePath;
@@ -48,7 +52,7 @@ protected:
     fs::remove_all(dir_);
   }
 
-  void start(MembershipCheck is_recipient) {
+  void start(MembershipCheck is_recipient, confide::transaction::DestinationCheck check = {}) {
     fs::remove_all(dir_);
     auto store = confide::storage::FileStore::open(dir_);
     ASSERT_TRUE(store.has_value()) << store.error().detail;
@@ -59,7 +63,7 @@ protected:
                                              ServiceOptions{.local_server = "siteA",
                                                             .default_retention_days = 1,
                                                             .max_retention_days = 7,
-                                                            .check_destination = {},
+                                                            .check_destination = std::move(check),
                                                             .is_recipient = std::move(is_recipient),
                                                             .on_committed = {}});
   }
