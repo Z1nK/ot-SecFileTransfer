@@ -102,6 +102,9 @@ json::object transaction_object(const transaction::Transaction& tx) {
       {"sender", tx.sender},
       {"target_user", tx.target_user},
       {"target_server", tx.target_server},
+      // The peer that pushed it, "" if it was created here: `sender` alone
+      // does not tell alice@siteB from the alice of this server.
+      {"origin_server", tx.origin_server},
       {"comment", tx.comment},
       {"created_at", common::format_iso8601(tx.created_at)},
       {"expires_at", common::format_iso8601(tx.expires_at)},
@@ -199,7 +202,6 @@ std::string encode_file(const transaction::FileEntry& file) {
 
 std::string encode_admin_transaction(const transaction::Transaction& tx) {
   auto obj = transaction_object(tx);
-  obj["origin_server"] = tx.origin_server;
   json::array files;
   files.reserve(tx.files.size());
   for (const auto& f : tx.files) {
@@ -213,9 +215,7 @@ std::string encode_admin_transaction_list(const std::vector<transaction::Transac
   json::array arr;
   arr.reserve(txs.size());
   for (const auto& tx : txs) {
-    auto obj = transaction_object(tx);
-    obj["origin_server"] = tx.origin_server;
-    arr.push_back(std::move(obj));
+    arr.push_back(transaction_object(tx));
   }
   return json::serialize(json::object{{"transactions", std::move(arr)}});
 }

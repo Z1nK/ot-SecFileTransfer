@@ -136,6 +136,7 @@ TEST(EncodeTransaction, Fields) {
   EXPECT_EQ(obj.at("sender").as_string(), "alice");
   EXPECT_EQ(obj.at("target_user").as_string(), "bob");
   EXPECT_EQ(obj.at("target_server").as_string(), "siteB");
+  EXPECT_EQ(obj.at("origin_server").as_string(), "");  // created here
   EXPECT_EQ(obj.at("comment").as_string(), "Q3 reports");
   EXPECT_EQ(obj.at("created_at").as_string(), "2026-10-01T10:00:00Z");
   EXPECT_EQ(obj.at("expires_at").as_string(), "2026-10-31T10:00:00Z");
@@ -144,6 +145,19 @@ TEST(EncodeTransaction, Fields) {
   EXPECT_EQ(obj.at("file_count").to_number<int>(), 2);
   EXPECT_EQ(obj.at("total_bytes").to_number<int>(), 8);
   EXPECT_FALSE(obj.contains("files"));
+}
+
+// The receiver must be able to tell alice@siteA from the alice of their own
+// server, so a pushed transaction names the server it came from.
+TEST(EncodeTransaction, PushedOneNamesItsOrigin) {
+  auto tx = sample();
+  tx.target_server.clear();
+  tx.origin_server = "siteA";
+  const auto obj = parse(api::encode_transaction(tx));
+  EXPECT_EQ(obj.at("origin_server").as_string(), "siteA");
+  const auto list = parse(api::encode_transaction_list({tx}));
+  EXPECT_EQ(list.at("transactions").as_array().at(0).as_object().at("origin_server").as_string(),
+            "siteA");
 }
 
 TEST(EncodeTransaction, OpenHasNoCommitTime) {

@@ -28,7 +28,7 @@ Result<void> list_box(const Global& global, std::string_view box) {
     }
     const auto& tx = v.get_object();
     const auto peer =
-        in ? std::string{str(tx, "sender")} : address(tx, "target_user", "target_server");
+        in ? address(tx, "sender", "origin_server") : address(tx, "target_user", "target_server");
     std::cout << std::format("{:<36}  {:<9}  {:<24}  {:>5}  {:>12}  {:<20}  {}\n", str(tx, "id"),
                              str(tx, "state"), peer, num(tx, "file_count"), num(tx, "total_bytes"),
                              str(tx, "created_at"), str(tx, "comment"));
