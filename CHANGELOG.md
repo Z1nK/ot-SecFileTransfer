@@ -16,6 +16,24 @@ Each release is split into two parts:
 #### Added
 - **GNOME Files (Nautilus): "Get with ftc…"** on the background of a folder (and "Get with ftc into folder…" on a selected folder) opens a dialog (`ftc-get-dialog`, zenity) that lists the downloadable transactions of the inbox (committed and delivered), logs in if needed and runs `ftc get` for the chosen ones into that folder. Existing files are overwritten only after asking. Installed with the client package as `bin/ftc-get-dialog`.
 - **Nautilus integration: `install.sh` / `uninstall.sh`** in `integrations/nautilus/` install and remove the menu items for the current user without the package (the nautilus-python extension, or Nautilus scripts when nautilus-python is missing) and warn about missing dependencies.
+- **`rest.max_upload_bytes`** sets the largest single file a client or peer may upload; a larger one is refused with 400 from its `Content-Length`, before any of it is read. Default `0` = no limit, as before.
+- **`origin_server` in transaction JSON.** Users now see which server a received transaction came from (it was admin-only), and `ftc inbox` shows the sender as `alice@siteA` for those: `alice` alone could not be told from the alice of one's own server.
+
+#### Changed
+- **A peer's push is checked like local input.** The sender name must follow the rule for user names (1-64 chars of `[A-Za-z0-9._-]`), and an expiry beyond this server's `retention.max_days` is shortened to it.
+- **Old failed logins are forgotten.** A user, address or pair with no failed login for an hour starts again at zero.
+
+#### Fixed
+- **LDAP: a recipient typed in another case never got the transaction.** `--to Alice` was accepted (LDAP ignores case) but stored as typed, while alice's inbox matches the directory's spelling exactly. The target is now stored as the directory spells it, for local sends and for pushes from a peer.
+- **An LDAP outage could stall every request.** An inbox listing asked the directory about group membership once per transaction while holding the lock on all transactions, waiting `timeout_s` each time. It now asks once per target name, without the lock and off the network threads, and after an unanswered lookup the next ones fail at once for 10 s.
+- **One address could end up throttled for good.** The per-address count of failed logins only ever grew (a successful login does not clear it), so an address shared by many users reached the limit and every further typo blocked all of them.
+- **Requests for transaction ids that do not exist** each left a small lock object behind, so any user could make the server's memory grow.
+
+### Technical
+
+#### Changed
+- `transaction::DestinationCheck` returns the target name to store; `auth::IUserDirectory` has `canonical_user()`; `is_valid_name` moved to `common/name.hpp` so `transaction` can use it without `config`.
+- `TransactionService::lock_existing()` replaces `lock_for()` wherever the id comes from a request.
 
 ## [0.7.6] — 2026-11-10
 
