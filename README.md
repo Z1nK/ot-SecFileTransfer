@@ -184,6 +184,7 @@ Everything else has a default. Unknown keys give a warning in the technical log.
 | `rest.threads` | `0` | worker threads, `0` = number of CPU cores |
 | `rest.blocking_threads` | `0` | threads for disk writes/reads and password checks (LDAP), so a slow disk or directory doesn't stall the network threads; about the number of uploads/downloads you expect at once. `0` = 2 × CPU cores, at least 4 |
 | `rest.request_timeout_ms` | `30000` | request timeout |
+| `rest.max_upload_bytes` | `0` | largest single file a client (or peer) may upload, in bytes; a larger one is refused with 400 before any of it is read. `0` = no limit: any user can then fill the disk |
 | `tls.enabled` | `true` | HTTPS on/off. `false` sends passwords and files in clear text: local testing only |
 | `tls.cert`, `tls.key` | — | PEM certificate and key, required when TLS is on |
 | `tls.ca` | system CAs | CA bundle to verify peer servers |

@@ -32,6 +32,7 @@ struct RestCfg {
   uint32_t threads = 0;  // 0 = hardware_concurrency
   uint32_t blocking_threads = 0;  // 0 = 2 * hardware_concurrency, at least 4
   uint32_t request_timeout_ms = 30'000;
+  uint64_t max_upload_bytes = 0;  // largest request body (one file); 0 = no limit
 };
 
 // On by default. Same cert/key serve the API and outgoing forwards.

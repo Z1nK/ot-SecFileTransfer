@@ -25,7 +25,8 @@ struct ServerOptions {
   // nullptr = plain HTTP. Shared with nothing else; built by make_tls_context().
   std::shared_ptr<asio::ssl::context> tls{};
 
-  // bind, port, threads, blocking_threads and timeout from [rest]; TLS from
+  // bind, port, threads, blocking_threads, timeout and max_upload_bytes from
+  // [rest]; TLS from
   // [tls] when enabled.
   // `io` if the certificate or key can't be loaded.
   static Result<ServerOptions> from_config(const config::Config& cfg);

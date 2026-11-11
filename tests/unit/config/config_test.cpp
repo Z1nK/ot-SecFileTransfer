@@ -64,6 +64,7 @@ port = 9000
 threads = 8
 blocking_threads = 16
 request_timeout_ms = 5000
+max_upload_bytes = 21474836480
 
 [tls]
 cert = "/etc/confide/cert.pem"
@@ -103,6 +104,7 @@ accept_token = "in-0123456789abcdef0123456789abcdef"
   EXPECT_EQ(cfg->rest().threads, 8U);
   EXPECT_EQ(cfg->rest().blocking_threads, 16U);
   EXPECT_EQ(cfg->rest().request_timeout_ms, 5000U);
+  EXPECT_EQ(cfg->rest().max_upload_bytes, 21474836480ULL);  // 20 GiB: more than 32 bits
   EXPECT_TRUE(cfg->tls().enabled);
   EXPECT_EQ(cfg->tls().cert_path, "/etc/confide/cert.pem");
   EXPECT_EQ(cfg->auth().token_ttl_s, 600U);

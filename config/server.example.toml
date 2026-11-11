@@ -11,6 +11,7 @@ port = 8080
 threads = 0                      # 0 = number of cores
 blocking_threads = 0             # disk I/O and LDAP checks; 0 = 2 x cores, at least 4
 request_timeout_ms = 30000
+# max_upload_bytes = 0           # largest single file a client may upload; 0 = no limit
 
 [tls]
 enabled = true                   # set false for local testing only
