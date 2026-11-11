@@ -35,8 +35,9 @@ std::size_t TransactionService::lock_count() const {
   return locks_.size();
 }
 
-Result<void> TransactionService::destroy(const common::TransactionId& id, BizEventType type,
-                                         const Caller& actor) {
+Result<void> TransactionService::destroy(
+    const common::TransactionId& id, BizEventType type, const Caller& actor,
+    const std::function<Result<void>(const Transaction&)>& allowed) {
   {
     CFD_TRY(mu, lock_existing(id));
     const std::scoped_lock lock(*mu);
@@ -44,6 +45,9 @@ Result<void> TransactionService::destroy(const common::TransactionId& id, BizEve
     auto tx = repo_.find(id);
     if (!tx) {
       return not_found(id);
+    }
+    if (allowed) {
+      CFD_TRYV(allowed(*tx));
     }
     // Already `expired` (an earlier delete failed): just try the delete again.
     if (tx->state != State::expired) {

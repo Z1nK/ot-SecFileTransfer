@@ -39,6 +39,7 @@ extern const Command kCreate;
 extern const Command kAdd;
 extern const Command kRm;
 extern const Command kCommit;
+extern const Command kDelete;
 
 // --to, --retention, --comment of `send` and `create`.
 void new_transaction_options(po::options_description& desc);

@@ -46,6 +46,8 @@ std::string_view to_string(BizEventType type) {
     return "file_removed";
   case BizEventType::committed:
     return "committed";
+  case BizEventType::discarded:
+    return "discarded";
   case BizEventType::forwarded:
     return "forwarded";
   case BizEventType::received:

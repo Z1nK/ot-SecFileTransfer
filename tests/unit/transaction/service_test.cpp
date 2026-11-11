@@ -245,6 +245,50 @@ TEST_F(GroupTargetTest, PeerPushIsValidated) {
   EXPECT_EQ(forever->expires_at, now + std::chrono::days{7});
 }
 
+// The sender may delete what they created while it is open, and nothing else.
+TEST_F(GroupTargetTest, SenderDiscardsOnlyTheirOwnOpenTransaction) {
+  const auto tx = create_open();
+  const Caller peer{.name = "siteB", .is_peer = true};
+  const Caller admin{.name = "root", .is_admin = true};
+
+  // Not the group members, an outsider, a peer or an admin (who has
+  // admin_delete() for that).
+  for (const auto& other : {alice_, dave_, peer, admin}) {
+    EXPECT_EQ(service_->discard(other, tx.id).error().code, ErrCode::forbidden) << other.name;
+  }
+  EXPECT_TRUE(store_->has_transaction(tx.id));
+
+  ASSERT_TRUE(service_->discard(carol_, tx.id).has_value());
+  EXPECT_FALSE(store_->has_transaction(tx.id));
+  EXPECT_EQ(service_->get(carol_, tx.id).error().code, ErrCode::notfound);
+  EXPECT_TRUE(service_->list(carol_, Box::out).empty());
+  EXPECT_EQ(service_->discard(carol_, tx.id).error().code, ErrCode::notfound);
+  EXPECT_EQ(service_->lock_count(), 0U);
+}
+
+TEST_F(GroupTargetTest, CommittedTransactionCannotBeDiscarded) {
+  const auto tx = create_open();
+  ASSERT_TRUE(service_->commit(carol_, tx.id).has_value());
+
+  EXPECT_EQ(service_->discard(carol_, tx.id).error().code, ErrCode::conflict);
+  // Untouched: the members still read it.
+  EXPECT_EQ(service_->get(carol_, tx.id).value().state, confide::transaction::State::committed);
+  EXPECT_TRUE(service_->open_download(alice_, tx.id, path_).has_value());
+}
+
+// An upload that was running when the transaction was deleted ends with an
+// error and leaves no file behind.
+TEST_F(GroupTargetTest, DiscardEndsAnUploadInProgress) {
+  const auto tx = create_open();
+  auto up = service_->begin_upload(carol_, tx.id, RelativePath::parse("late.bin").value());
+  ASSERT_TRUE(up.has_value());
+  ASSERT_TRUE(up->write(std::string_view("bytes")).has_value());
+
+  ASSERT_TRUE(service_->discard(carol_, tx.id).has_value());
+  EXPECT_EQ(up->finish().error().code, ErrCode::notfound);
+  EXPECT_FALSE(store_->has_transaction(tx.id));
+}
+
 TEST_F(GroupTargetTest, OutsidersAreForbidden) {
   const auto tx = create_open();
   ASSERT_TRUE(service_->commit(carol_, tx.id).has_value());

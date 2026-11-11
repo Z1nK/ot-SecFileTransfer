@@ -185,4 +185,14 @@ Result<Transaction> TransactionService::commit(const Caller& caller,
   return std::move(*committed);
 }
 
+Result<void> TransactionService::discard(const Caller& caller, const common::TransactionId& id) {
+  return destroy(id, BizEventType::discarded, caller, [&](const Transaction& tx) -> Result<void> {
+    // The sender only: not the target, and not the peer that pushed it.
+    if (!is_sender(caller, tx)) {
+      return forbidden(id);
+    }
+    return require_mutable(tx.state);
+  });
+}
+
 }  // namespace confide::transaction

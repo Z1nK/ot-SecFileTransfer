@@ -55,6 +55,12 @@ Result<void> TransactionHandlers::register_routes(Router& router) {
           .fn = &TransactionHandlers::get,
       },
       Def{
+          .method = verb::delete_,
+          .pattern = "/transactions/{id}",
+          .access = Access::user,
+          .fn = &TransactionHandlers::discard,
+      },
+      Def{
           .method = verb::post,
           .pattern = "/transactions/{id}/commit",
           .access = Access::user,
@@ -229,6 +235,19 @@ asio::awaitable<void> TransactionHandlers::remove_file(RequestContext& ctx) {
   }
   auto removed = co_await offload(ctx.blocking,
                                   [&] { return service_.remove_file(ctx.caller, *id, *path); });
+  if (!removed) {
+    co_return co_await fail(ctx, removed.error());
+  }
+  co_await ctx.exchange.send(Response::no_content());
+}
+
+asio::awaitable<void> TransactionHandlers::discard(RequestContext& ctx) {
+  auto id = id_param(ctx);
+  if (!id) {
+    co_return co_await fail(ctx, id.error());
+  }
+  // Deletes the transaction folder with all its files.
+  auto removed = co_await offload(ctx.blocking, [&] { return service_.discard(ctx.caller, *id); });
   if (!removed) {
     co_return co_await fail(ctx, removed.error());
   }

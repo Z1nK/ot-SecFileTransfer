@@ -130,6 +130,22 @@ if ftc_as alice siteA rm "$id" a.txt 2>"$WORK/err.txt"; then
 fi
 grep -q notfound "$WORK/err.txt" || die "unexpected error: $(cat "$WORK/err.txt")"
 ftc_as alice siteA commit "$id" | grep -q "^committed $id" || die "commit of $id failed"
+# Committed: the sender can no longer delete it.
+if ftc_as alice siteA delete "$id" 2>"$WORK/err.txt"; then
+  die "delete of committed $id succeeded"
+fi
+grep -q conflict "$WORK/err.txt" || die "unexpected error: $(cat "$WORK/err.txt")"
+
+# An open one: only its sender deletes it, and then it is gone.
+open_id=$(ftc_as alice siteA create --to carol | sent_id)
+ftc_as alice siteA add "$open_id" "$src/a.txt" >/dev/null
+if ftc_as carol siteA delete "$open_id" 2>"$WORK/err.txt"; then
+  die "carol deleted alice's open $open_id"
+fi
+grep -q notfound "$WORK/err.txt" || die "unexpected error: $(cat "$WORK/err.txt")"
+ftc_as alice siteA delete "$open_id" | grep -q "^deleted $open_id" || die "delete of $open_id failed"
+ftc_as alice siteA outbox | grep -q "$open_id" && die "deleted $open_id still in alice's outbox"
+[[ ! -e $WORK/siteA/data/transactions/$open_id ]] || die "files of $open_id still on disk"
 [[ $(show_field alice siteA "$id" state) == committed ]] || die "$id not committed"
 if ftc_as alice siteA add "$id" "$src/a.txt" 2>"$WORK/err.txt"; then
   die "add into a committed transaction succeeded"

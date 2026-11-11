@@ -1,4 +1,4 @@
-// ftc create, add, rm, commit: build a transaction step by step. `send` does
+// ftc create, add, rm, commit, delete: build a transaction step by step. `send` does
 // all of it at once; these leave the transaction open between the steps.
 #include "commands.hpp"
 #include <client/local_files.hpp>
@@ -85,6 +85,14 @@ Result<void> run_commit(const Global& global, const po::variables_map& vm) {
   return {};
 }
 
+Result<void> run_delete(const Global& global, const po::variables_map& vm) {
+  CFD_TRY(id, common::TransactionId::parse(vm["id"].as<std::string>()));
+  CFD_TRY(client, connect(global));
+  CFD_TRYV(client.call(http_verb::delete_, tx_target(id)));
+  std::cout << "deleted " << id.str() << '\n';
+  return {};
+}
+
 }  // namespace
 
 void new_transaction_options(po::options_description& desc) {
@@ -120,5 +128,6 @@ const Command kCreate{
 const Command kAdd{.name = "add", .synopsis = " ID PATH...", .options = id_and_paths, .run = run_add};
 const Command kRm{.name = "rm", .synopsis = " ID PATH...", .options = id_and_paths, .run = run_rm};
 const Command kCommit{.name = "commit", .synopsis = " ID", .options = id_only, .run = run_commit};
+const Command kDelete{.name = "delete", .synopsis = " ID", .options = id_only, .run = run_delete};
 
 }  // namespace confide::cli

@@ -7,6 +7,7 @@
 #include "transaction/transaction.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -99,6 +100,13 @@ public:
   // which the next commit overwrites.
   Result<Transaction> commit(const Caller& caller, const common::TransactionId& id);
 
+  // Deletes an open transaction of the caller with its files and logs
+  // `discarded`: a send that failed half way, or one made by mistake. Only
+  // the sender, and only while it is open: `conflict` once committed (what
+  // the target may already have seen stays until retention or an admin
+  // removes it), `gone` if expired. An upload in progress fails at its end.
+  Result<void> discard(const Caller& caller, const common::TransactionId& id);
+
   // --- Reading ------------------------------------------------------------
 
   Result<Transaction> get(const Caller& caller, const common::TransactionId& id) const;
@@ -167,9 +175,12 @@ private:
   Result<std::shared_ptr<std::mutex>> lock_existing(const common::TransactionId& id);
 
   // Marks the transaction expired, deletes it with its files and logs
-  // `type` with `actor`. Shared by expire() and admin_delete().
+  // `type` with `actor`. Shared by expire(), admin_delete() and discard().
+  // `allowed`, if set, is asked under the transaction's lock and its error
+  // ends the call: the state it saw can't change before the delete.
   Result<void> destroy(const common::TransactionId& id, logging::BizEventType type,
-                       const Caller& actor);
+                       const Caller& actor,
+                       const std::function<Result<void>(const Transaction&)>& allowed = {});
 
   TransactionRepository& repo_;
   storage::FileStore& store_;

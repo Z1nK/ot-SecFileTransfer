@@ -19,6 +19,7 @@ enum class BizEventType : std::uint8_t {
   file_added,
   file_removed,
   committed,
+  discarded,   // deleted by its sender while still open
   forwarded,   // pushed to a peer (sender side)
   received,    // stored from a peer (receiver side)
   downloaded,  // a whole file was streamed to the target user

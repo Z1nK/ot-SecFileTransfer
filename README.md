@@ -295,6 +295,7 @@ User requests carry either HTTP Basic auth (`curl -u user:password`) or a user t
 | `PUT` | `/transactions/{id}/files/{path}` | upload a file (raw body). Optional header `X-Checksum-SHA256: <hex>` |
 | `DELETE` | `/transactions/{id}/files/{path}` | remove a file (only while `open`) |
 | `POST` | `/transactions/{id}/commit` | lock the transaction |
+| `DELETE` | `/transactions/{id}` | delete my own transaction with its files, only while `open` (409 once committed) |
 | `GET` | `/transactions/{id}/files` | list files with size and sha256 |
 | `GET` | `/transactions/{id}/files/{path}` | download a file; the response has `X-Checksum-SHA256` |
 | `POST`/`PUT` | `/internal/transactions/...` | server-to-server, peer Bearer token only |
@@ -414,7 +415,9 @@ Notes:
 - `ftc outbox` lists the transactions you sent.
 - `get` does not overwrite existing files unless you add `--force`.
 - If an upload fails, `send` prints the id of the transaction it left `open`; finish it with
-  `add` and `commit`.
+  `add` and `commit`, or remove it with `ftc delete ID`.
+- `ftc delete ID` deletes a transaction you created, with its files, while it is still `open`;
+  after `commit` it fails with `conflict` (only an admin can delete it then).
 - `add` replaces a file already in the transaction under the same path. `add` and `rm` only
   work while the transaction is `open`; after `commit` they fail with `conflict`.
 - With TLS, use an `https://` URL and `--ca-file cert.pem` (or `FTC_CA_FILE`) for a self-signed certificate.

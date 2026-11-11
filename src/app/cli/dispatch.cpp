@@ -30,6 +30,7 @@ constexpr std::string_view kCommands = R"(Commands:
   rm ID PATH...         remove files from an open transaction, by their
                         path in the transaction (see 'ftc files ID')
   commit ID             commit an open transaction; no changes after that
+  delete ID             delete an open transaction you created, with its files
   inbox                 list transactions sent to you
   outbox                list transactions you sent
   show ID               show one transaction
@@ -45,7 +46,7 @@ Run 'ftc COMMAND --help' for the options of a command.
 
 const std::array kAll{
     &kLogin, &kLogout, &kSend, &kRecent, &kCreate, &kAdd, &kRm,
-    &kCommit, &kInbox, &kOutbox, &kShow, &kFiles, &kGet,
+    &kCommit, &kDelete, &kInbox, &kOutbox, &kShow, &kFiles, &kGet,
 };
 
 const Command* find(std::string_view name) {

@@ -53,7 +53,8 @@ Result<void> run_send(const Global& global, const po::variables_map& vm) {
     return {};
   };
   if (auto res = upload_all(); !res) {
-    std::cerr << "transaction " << id.str() << " left open, not committed\n";
+    std::cerr << "transaction " << id.str() << " left open, not committed (remove it with: ftc delete "
+              << id.str() << ")\n";
     return res;
   }
   std::cout << "committed " << id.str() << " (" << files.size() << " files)\n";
