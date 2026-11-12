@@ -331,7 +331,8 @@ TEST_F(ForwarderTest, UnknownUserOnThePeerIsNotRetried) {
   ASSERT_FALSE(res.has_value());
   EXPECT_EQ(res.error().code, ErrCode::unknown_destination);
   EXPECT_FALSE(Forwarder::is_transient(res.error().code));
-  EXPECT_EQ(state_on_a(tx.id), State::committed);
+  EXPECT_EQ(state_on_a(tx.id), State::committed);  // The peer logs the push it refused.
+  EXPECT_TRUE(lines_->contains("POST /internal/transactions from peer siteA: unknown_destination"));
 }
 
 TEST_F(ForwarderTest, WrongPeerTokenIsNotRetried) {
@@ -347,6 +348,7 @@ TEST_F(ForwarderTest, WrongPeerTokenIsNotRetried) {
   ASSERT_FALSE(res.has_value());
   EXPECT_EQ(res.error().code, ErrCode::auth);
   EXPECT_FALSE(Forwarder::is_transient(res.error().code));
+  EXPECT_TRUE(lines_->contains("POST /internal/transactions from 127.0.0.1: bad peer token"));
 }
 
 TEST_F(ForwarderTest, PeerDownIsTransient) {

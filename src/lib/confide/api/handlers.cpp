@@ -370,6 +370,16 @@ asio::awaitable<void> TransactionHandlers::fail(RequestContext& ctx, const Error
     tlog_.error("api", "{} {}: {}: {} ({}:{})", sv(req.method_string()), sv(req.target()),
                 common::to_string(err.code), err.detail, err.origin.file_name(),
                 err.origin.line());
+  } else if (ctx.caller.is_peer) {
+    // A refused push is otherwise visible only in the sending server's log.
+    // `conflict` is a sender resuming an interrupted push: expected.
+    if (err.code == ErrCode::conflict) {
+      tlog_.info("api", "{} {} from peer {}: {}: {}", sv(req.method_string()), sv(req.target()),
+                 ctx.caller.name, common::to_string(err.code), err.detail);
+    } else {
+      tlog_.warn("api", "{} {} from peer {}: {}: {}", sv(req.method_string()), sv(req.target()),
+                 ctx.caller.name, common::to_string(err.code), err.detail);
+    }
   }
 
   if (err.code == ErrCode::forbidden) {

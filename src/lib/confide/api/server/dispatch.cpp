@@ -45,7 +45,11 @@ asio::awaitable<void> HttpServer::Impl::dispatch(Exchange& ex, const std::string
     return auth.authenticate_user(req, source);
   });
   if (!caller) {
-    if (caller.error().code == ErrCode::throttled || caller.error().code == ErrCode::forbidden) {
+    // A bad peer token is a misconfigured or hostile server: worth a line,
+    // unlike a user's mistyped password.
+    const auto code = caller.error().code;
+    if (code == ErrCode::throttled || code == ErrCode::forbidden
+        || (code == ErrCode::auth && route.access == Access::peer)) {
       tlog.warn(kTag, "{} {} from {}: {}", sv(req.method_string()), sv(req.target()), source,
                 caller.error().detail);
     }
