@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <mutex>
+#include <string>
 #include <vector>
 
 namespace confide::transaction {
@@ -53,6 +54,18 @@ Result<void> TransactionService::mark_delivered(const common::TransactionId& id)
   ev.total_bytes = tx->total_bytes();
   blog_.record(ev);
   return {};
+}
+
+void TransactionService::record_forward_failed(const common::TransactionId& id,
+                                               const common::Error& err) {
+  const auto tx = repo_.find(id);
+  if (!tx) {
+    return;
+  }
+  auto ev = event_for(BizEventType::forward_failed, *tx, Caller{.name = "system", .is_peer = false});
+  ev.error = std::string{common::to_string(err.code)};
+  ev.detail = err.detail;
+  blog_.record(ev);
 }
 
 std::vector<common::TransactionId> TransactionService::list_expired() const {

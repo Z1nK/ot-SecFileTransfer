@@ -55,8 +55,9 @@ struct ForwarderOptions {
 // exponential backoff while the error may go away by itself (network,
 // peer overloaded or failing: `unavailable`, `throttled`, `internal`,
 // `io`, `integrity`). Any other error (unknown user on the peer, wrong
-// peer token, ...) is logged and the transaction waits for the next start,
-// since fixing it means changing a config. A retry first asks the peer how
+// peer token, ...) is logged, recorded as `forward_failed` in the business
+// log, and the transaction waits for the next start, since fixing it means
+// changing a config. A retry first asks the peer how
 // far the earlier push got, so files are sent again only into a
 // transaction that is still open there.
 //

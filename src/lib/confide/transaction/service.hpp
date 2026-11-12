@@ -153,6 +153,10 @@ public:
   // committed -> delivered, after the peer confirmed the push.
   Result<void> mark_delivered(const common::TransactionId& id);
 
+  // Logs `forward_failed` for a push the forwarder gave up on. The
+  // transaction stays committed. Does nothing if it no longer exists.
+  void record_forward_failed(const common::TransactionId& id, const common::Error& err);
+
   // Transactions whose expires_at has passed, in any state.
   std::vector<common::TransactionId> list_expired() const;
 

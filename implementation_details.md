@@ -886,7 +886,9 @@ main: signal_io.run() returns -> server.wait() joins all threads
 - **Business log** (`business.log`, `logging::BusinessLog::record(BizEvent)`):
   one event per business action: `tx_created`, `file_added`, `file_removed`,
   `committed`, `received`, `downloaded`, `expired` (retention sweep),
-  `forwarded` once the peer confirmed a push (`mark_delivered()`), and the
+  `forwarded` once the peer confirmed a push (`mark_delivered()`),
+  `forward_failed` (`error`, `detail`) when the forwarder gives up on a push
+  until the next start (`record_forward_failed()`), and the
   admin actions `admin_deleted`, `retention_changed` (`days`) and
   `sessions_revoked` (`user`, no `tx`). `GET /admin/log` reads it back with
   `logging::read_business_log()`.

@@ -21,6 +21,7 @@ enum class BizEventType : std::uint8_t {
   committed,
   discarded,   // deleted by its sender while still open
   forwarded,   // pushed to a peer (sender side)
+  forward_failed,  // push refused for good; stays committed until the next start
   received,    // stored from a peer (receiver side)
   downloaded,  // a whole file was streamed to the target user
   expired,     // deleted by the retention job
@@ -54,6 +55,8 @@ struct BizEvent {
   std::optional<uint32_t> file_count{};  // committed / forwarded / received
   std::optional<uint64_t> total_bytes{};
   std::optional<int> retention_days{};  // retention_changed
+  std::string error{};   // forward_failed: ErrCode name
+  std::string detail{};  // forward_failed: what went wrong
 };
 
 // Audit trail of who sent what to whom. Unlike TechLog it has no levels

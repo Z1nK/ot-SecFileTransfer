@@ -50,6 +50,8 @@ std::string_view to_string(BizEventType type) {
     return "discarded";
   case BizEventType::forwarded:
     return "forwarded";
+  case BizEventType::forward_failed:
+    return "forward_failed";
   case BizEventType::received:
     return "received";
   case BizEventType::downloaded:
@@ -86,6 +88,8 @@ std::string BusinessLog::format(const BizEvent& e, common::Timestamp ts) {
   line.num("files", e.file_count);
   line.num("bytes", e.total_bytes);
   line.num("days", e.retention_days);
+  line.str("error", e.error);
+  line.str("detail", e.detail);
   return std::move(line).finish(std::format(R"({{"v":{},"ts":"{}","event":"{}")", kSchemaVersion,
                                             common::format_iso8601(ts), to_string(e.type)));
 }

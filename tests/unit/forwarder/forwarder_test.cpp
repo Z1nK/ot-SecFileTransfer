@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <map>
@@ -51,11 +52,6 @@ namespace fs = std::filesystem;
 using namespace std::chrono_literals;
 
 namespace {
-
-class NullSink final : public confide::logging::ILogSink {
-public:
-  void write(confide::logging::LogLevel, std::string_view) override {}
-};
 
 // Keeps the technical log, to see what the forwarder's worker did.
 class LinesSink final : public confide::logging::ILogSink {
@@ -111,7 +107,8 @@ struct Site {
                 }) {}
 
   confide::common::SystemClock clock;
-  confide::logging::BusinessLog blog{std::make_unique<NullSink>(), clock};
+  LinesSink* events = new LinesSink;  // owned by blog
+  confide::logging::BusinessLog blog{std::unique_ptr<LinesSink>(events), clock};
   FileStore store;
   TransactionRepository repo;
   TransactionService service;
@@ -420,6 +417,13 @@ TEST_F(ForwarderTest, PermanentFailureLeavesTheQueue) {
   std::this_thread::sleep_for(100ms);
   EXPECT_EQ(forwarder_->queued(), 0U);
   EXPECT_EQ(state_on_a(tx.id), State::committed);
+  EXPECT_TRUE(lines_->contains("not forwarded, stays committed"));
+  EXPECT_TRUE(eventually([&] {
+    return site_a_->events->contains(
+        R"("event":"forward_failed","tx":")" + tx.id.str()
+        + R"(","actor":"system","from":"alice","to":"carol","server":"siteB",)"
+          R"("error":"unknown_destination","detail":")");
+  }));
 }
 
 TEST_F(ForwarderTest, StopAbortsAStalledPush) {

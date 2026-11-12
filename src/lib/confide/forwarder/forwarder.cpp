@@ -250,6 +250,9 @@ void Forwarder::run() {
       }
       tlog_.error(kTag, "{} not forwarded, stays committed until the next start: {}", item.id.str(),
                   describe(err));
+      service_.record_forward_failed(item.id, err);
+    } else if (item.attempts > 0) {
+      tlog_.info(kTag, "{} delivered after {} failed attempt(s)", item.id.str(), item.attempts);
     }
     lock.lock();
   }
