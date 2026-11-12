@@ -896,8 +896,14 @@ main: signal_io.run() returns -> server.wait() joins all threads
   start/stop, a summary line when a sweep removed something, and a warning
   per failed `expire()`.
 - The forwarder (tag `forwarder`): start/stop, how many transactions were
-  left from before, one line per delivered transaction, a warning per failed
-  attempt with the time until the retry, and an error when it gives up.
+  left from before, one line per delivered transaction (plus how many
+  attempts failed before, if any), a warning for a failed attempt with the
+  time until the retry, and an error when it gives up. Failed attempts are
+  logged for the first one, when the error code changes, and every
+  `ForwarderOptions::log_every` (10) attempts, not each one.
+- The receiving side of a push (tag `api`): a warning for a bad peer token
+  and for every request a peer makes on `/internal/*` that is refused with
+  a 4xx (`info` for `conflict`, which is a sender resuming a push).
 
 ---
 
