@@ -50,14 +50,57 @@ else
   what="${#paths[@]} items"
 fi
 
-# Recipient: extra arguments to `zenity --entry` make an editable list, so a
-# recent one can be picked or a new one typed. The first is preselected.
+trim() {
+  local s=$1
+  s=${s#"${s%%[![:space:]]*}"}
+  printf '%s' "${s%"${s##*[![:space:]]}"}"
+}
+
+# Recipient and optional comment in one form. A form's combo can't be typed
+# into, so with recent recipients there is a list to pick from plus a field
+# to type a new one (which wins when filled in). The fields come back joined
+# by the unit separator: a comment can't contain control characters.
 mapfile -t recent < <("$FTC" recent 2>/dev/null)
-to=$(zenity --entry --title="$TITLE" --text="Send $what to (USER or USER@SERVER):" \
-  "${recent[@]}" 2>/dev/null) || exit 0
-to=${to#"${to%%[![:space:]]*}"}  # trim
-to=${to%"${to##*[![:space:]]}"}
-[[ -n $to ]] || exit 0
+SEP=$'\x1f'
+COMMENT_MAX=256
+text="Send $what"
+while :; do
+  fields=()
+  if ((${#recent[@]} > 0)); then
+    combo=$(IFS='|'; printf '%s' "${recent[*]}")
+    fields+=(--add-combo="Recent recipient" --combo-values="$combo"
+      --add-entry="Or type a recipient")
+  else
+    fields+=(--add-entry="Recipient (USER or USER@SERVER)")
+  fi
+  fields+=(--add-entry="Comment (optional)")
+
+  form=$(zenity --forms --title="$TITLE" --text="$text" --separator="$SEP" \
+    "${fields[@]}" 2>/dev/null) || exit 0
+
+  if ((${#recent[@]} > 0)); then
+    IFS=$SEP read -r picked typed comment <<<"$form"
+    to=$(trim "$typed")
+    [[ -n $to ]] || to=$(trim "$picked")
+  else
+    IFS=$SEP read -r typed comment <<<"$form"
+    to=$(trim "$typed")
+  fi
+  comment=$(trim "$comment")
+
+  if [[ -z $to ]]; then
+    text="Send $what
+Pick or type a recipient."
+  elif ((${#comment} > COMMENT_MAX)); then
+    text="Send $what
+The comment is ${#comment} characters long, at most $COMMENT_MAX are allowed."
+  else
+    break
+  fi
+done
+
+comment_args=()
+[[ -n $comment ]] && comment_args=(--comment "$comment")
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/ftc-send.XXXXXX") || error "Can't create a temporary folder."
 trap 'rm -rf "$work"' EXIT
@@ -66,7 +109,7 @@ trap 'rm -rf "$work"' EXIT
 # $work/out and $work/err, its exit code is returned.
 send() {
   (
-    "$FTC" send --to "$to" "${paths[@]}" </dev/null >"$work/out" 2>"$work/err"
+    "$FTC" send --to "$to" "${comment_args[@]}" "${paths[@]}" </dev/null >"$work/out" 2>"$work/err"
     echo $? >"$work/rc"
   ) | zenity --progress --pulsate --auto-close --no-cancel --title="$TITLE" \
     --text="Sending $what to $to…" 2>/dev/null

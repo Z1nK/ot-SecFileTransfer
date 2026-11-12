@@ -1,7 +1,8 @@
 # Nautilus: "Send with ftc…" and "Get with ftc…"
 
 - **Send:** right-click files or folders → **Send with ftc…** → pick a recent
-  recipient or type one → the files are sent with `ftc send`.
+  recipient or type one, optionally add a comment → the files are sent with
+  `ftc send` (the comment with `--comment`).
 - **Get:** right-click the empty space of a folder → **Get with ftc…** (or
   right-click a folder → **Get with ftc into folder…**) → tick transactions
   from your inbox → they are downloaded with `ftc get` into that folder,
@@ -13,7 +14,7 @@ If there is no valid token, a password dialog comes first.
 
 | File               | What it does |
 |--------------------|--------------|
-| `ftc-send-dialog`  | Send logic (bash + zenity): recipient dialog, login, `ftc send`, result notification. |
+| `ftc-send-dialog`  | Send logic (bash + zenity): recipient and comment dialog, login, `ftc send`, result notification. |
 | `ftc-get-dialog`   | Get logic (bash + zenity): inbox list, login, `ftc get`, overwrite question, result notification. |
 | `ftc_nautilus.py`  | Nautilus extension: adds the menu items and starts the dialogs with the selected paths or the current folder. |
 | `install.sh`       | Installs the above for the current user (without the package). |
