@@ -52,6 +52,10 @@ public:
   // POST /transactions/{id}/commit         -> 200 + transaction
   asio::awaitable<void> commit(RequestContext& ctx);
 
+  // POST /transactions/{id}/retry          -> 200 + transaction
+  // Another attempt to forward it to its target server, now (sender only).
+  asio::awaitable<void> retry(RequestContext& ctx);
+
   // GET /transactions/{id}/files           -> 200 + file list
   asio::awaitable<void> list_files(RequestContext& ctx);
 

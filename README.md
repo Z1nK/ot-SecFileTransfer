@@ -23,7 +23,7 @@ and [dev_info.md](dev_info.md) for how to add features.
 | retention: expired transactions are deleted every `sweep_interval_s` | |
 | Basic auth and user tokens (`ftc login`), login throttling, access rules, path checks | |
 | business and technical logs, log rotation | |
-| `ftc` client: `login`, `logout`, `send`, `inbox`, `outbox`, `show`, `files`, `get` | |
+| `ftc` client: `login`, `logout`, `send`, `inbox`, `outbox`, `show`, `files`, `get`, `retry` | |
 | unit tests, a two-server end-to-end test, a benchmark with a memory check | |
 
 ## 1. Build
@@ -219,11 +219,30 @@ certificate must name `host`. Each pair of servers shares two tokens, one per di
 siteA's `token` is siteB's `accept_token` for siteA, and the other way round.
 
 After a commit to `bob@siteB`, siteA pushes the transaction to siteB in the
-background and marks it `delivered`; `ftc show ID` on siteA tells you which. If
-siteB can't be reached, siteA retries after 5 s, 10 s, 20 s ... up to every 10
-minutes, and again after a restart. Errors that a retry can't fix (no user `bob` on
-siteB, wrong token) are logged in siteA's `technical.log`; the transaction then
-stays `committed` until the next start.
+background and marks it `delivered`. If siteB can't be reached, siteA retries after
+5 s, 10 s, 20 s ... up to every 10 minutes, and again after a restart. Errors that a
+retry can't fix (no user `bob` on siteB, wrong token) are logged in both servers'
+`technical.log` and as `forward_failed` in siteA's `business.log`; the transaction
+then stays `committed` until `ftc retry ID` or the next start.
+
+Until it is delivered, the sender sees how forwarding goes: `ftc outbox` shows
+`pending`, `retrying` or `failed` instead of `committed`, with a line saying why,
+and `ftc show ID` has the details (`forwarding.status`, `.attempts`,
+`.last_attempt_at`, `.next_attempt_at`, `.error`). The sender is told one of two
+reasons only: `unknown_destination` (no such user on that server) or
+`forwarding_error` (anything else). What exactly went wrong between the servers
+(peer down, wrong token, TLS, ...) is in `technical.log` and `business.log`, for
+the administrator:
+
+```
+ID                                    STATE      TO                        FILES         BYTES  CREATED               COMMENT
+3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b  failed     nobody@siteB                  1             6  2026-11-12T10:00:00Z
+3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b: not delivered: no such user on that server; once fixed: ftc retry 3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b
+```
+
+`ftc retry ID` asks for another attempt: after `failed` once the cause is
+fixed, or to skip the wait while `retrying`. The server tries no sooner than 5 s
+after the last failed attempt, however often it is asked.
 
 ### Minimal local config
 
@@ -291,11 +310,12 @@ User requests carry either HTTP Basic auth (`curl -u user:password`) or a user t
 | `DELETE` | `/auth/token` | log out: the Bearer token of the request stops working |
 | `POST` | `/transactions` | create; body `{"target_user": "bob", "target_server": "", "retention_days": 30, "comment": "Q3 reports"}` (only `target_user` is required; `comment` is at most 256 characters, no control characters) |
 | `GET` | `/transactions?box=in\|out` | my incoming (default) or outgoing transactions |
-| `GET` | `/transactions/{id}` | one transaction and its state |
+| `GET` | `/transactions/{id}` | one transaction and its state; a committed one for another server also has `forwarding` (`status` = `pending`/`retrying`/`failed`, `attempts`, times, last `error` = `unknown_destination` or `forwarding_error`) |
 | `PUT` | `/transactions/{id}/files/{path}` | upload a file (raw body). Optional header `X-Checksum-SHA256: <hex>` |
 | `DELETE` | `/transactions/{id}/files/{path}` | remove a file (only while `open`) |
 | `POST` | `/transactions/{id}/commit` | lock the transaction |
 | `DELETE` | `/transactions/{id}` | delete my own transaction with its files, only while `open` (409 once committed) |
+| `POST` | `/transactions/{id}/retry` | forward my committed transaction to its target server again, at least 5 s after the last failed attempt (409 if it is local or already delivered) |
 | `GET` | `/transactions/{id}/files` | list files with size and sha256 |
 | `GET` | `/transactions/{id}/files/{path}` | download a file; the response has `X-Checksum-SHA256` |
 | `POST`/`PUT` | `/internal/transactions/...` | server-to-server, peer Bearer token only |
@@ -412,7 +432,9 @@ Notes:
 
 - `--to bob@siteB` sends to a user on another server, `--retention DAYS` sets `retention_days`.
 - `--comment "Q3 reports"` (`-m`) attaches a short note, shown in the COMMENT column of `inbox`/`outbox`.
-- `ftc outbox` lists the transactions you sent.
+- `ftc outbox` lists the transactions you sent. One on its way to another server shows
+  `pending`, `retrying` or `failed` as its state until it is `delivered`.
+- `ftc retry ID` tries again shortly to forward a transaction you sent to another server.
 - `get` does not overwrite existing files unless you add `--force`.
 - If an upload fails, `send` prints the id of the transaction it left `open`; finish it with
   `add` and `commit`, or remove it with `ftc delete ID`.

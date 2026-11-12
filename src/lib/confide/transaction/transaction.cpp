@@ -52,6 +52,28 @@ Result<State> parse_state(std::string_view text) {
       common::Error::make(common::ErrCode::validation, "unknown state: " + std::string{text}));
 }
 
+std::string_view to_string(ForwardStatus status) {
+  switch (status) {
+  case ForwardStatus::pending:
+    return "pending";
+  case ForwardStatus::retrying:
+    return "retrying";
+  case ForwardStatus::failed:
+    return "failed";
+  }
+  return "unknown";
+}
+
+Result<ForwardStatus> parse_forward_status(std::string_view text) {
+  for (const auto s : {ForwardStatus::pending, ForwardStatus::retrying, ForwardStatus::failed}) {
+    if (text == to_string(s)) {
+      return s;
+    }
+  }
+  return std::unexpected(common::Error::make(common::ErrCode::validation,
+                                             "unknown forwarding status: " + std::string{text}));
+}
+
 const FileEntry* Transaction::find_file(const common::RelativePath& path) const {
   const auto it = std::ranges::lower_bound(files, path, {}, &FileEntry::path);
   return (it != files.end() && it->path == path) ? &*it : nullptr;

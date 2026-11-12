@@ -11,6 +11,8 @@ using confide::common::Sha256;
 using confide::common::Timestamp;
 using confide::common::TransactionId;
 using confide::transaction::FileEntry;
+using confide::transaction::ForwardInfo;
+using confide::transaction::ForwardStatus;
 using confide::transaction::ReceiveRequest;
 using confide::transaction::State;
 using confide::transaction::Transaction;
@@ -167,6 +169,57 @@ TEST(EncodeTransaction, OpenHasNoCommitTime) {
   const auto obj = parse(api::encode_transaction(tx));
   EXPECT_EQ(obj.at("state").as_string(), "open");
   EXPECT_FALSE(obj.contains("committed_at"));
+}
+
+// A committed transaction for another server tells its sender how
+// forwarding goes; "pending" until an attempt failed.
+TEST(EncodeTransaction, OutgoingShowsForwarding) {
+  auto tx = sample();
+  auto obj = parse(api::encode_transaction(tx));
+  ASSERT_TRUE(obj.contains("forwarding"));
+  const auto pending = obj.at("forwarding").as_object();
+  EXPECT_EQ(pending.at("status").as_string(), "pending");
+  EXPECT_EQ(pending.at("attempts").to_number<int>(), 0);
+  EXPECT_FALSE(pending.contains("error"));
+  EXPECT_FALSE(pending.contains("last_attempt_at"));
+
+  tx.forwarding = ForwardInfo{
+      .status = ForwardStatus::failed,
+      .attempts = 2,
+      .last_attempt_at = ts("2026-10-01T10:06:00Z"),
+      .error = "unknown_destination",
+  };
+  obj = parse(api::encode_transaction(tx));
+  const auto failed = obj.at("forwarding").as_object();
+  EXPECT_EQ(failed.at("status").as_string(), "failed");
+  EXPECT_EQ(failed.at("attempts").to_number<int>(), 2);
+  EXPECT_EQ(failed.at("last_attempt_at").as_string(), "2026-10-01T10:06:00Z");
+  EXPECT_FALSE(failed.contains("next_attempt_at"));
+  EXPECT_EQ(failed.at("error").as_string(), "unknown_destination");
+  EXPECT_FALSE(failed.contains("detail"));
+
+  // Anything else is a forwarding error to the sender: which one it was
+  // (peer down, wrong token, ...) is for the logs.
+  for (const auto* code : {"unavailable", "auth", "forbidden", "integrity", "internal"}) {
+    tx.forwarding->error = code;
+    const auto other = parse(api::encode_transaction(tx)).at("forwarding").as_object();
+    EXPECT_EQ(other.at("error").as_string(), "forwarding_error") << code;
+    EXPECT_FALSE(other.contains("detail")) << code;
+  }
+}
+
+TEST(EncodeTransaction, NoForwardingWhenNothingToForward) {
+  auto local = sample();
+  local.target_server.clear();
+  EXPECT_FALSE(parse(api::encode_transaction(local)).contains("forwarding"));
+
+  auto delivered = sample();
+  delivered.state = State::delivered;
+  EXPECT_FALSE(parse(api::encode_transaction(delivered)).contains("forwarding"));
+
+  auto open = sample();
+  open.state = State::open;
+  EXPECT_FALSE(parse(api::encode_transaction(open)).contains("forwarding"));
 }
 
 TEST(EncodeTransactionList, WrapsItems) {

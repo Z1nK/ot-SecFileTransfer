@@ -31,6 +31,8 @@ constexpr std::string_view kCommands = R"(Commands:
                         path in the transaction (see 'ftc files ID')
   commit ID             commit an open transaction; no changes after that
   delete ID             delete an open transaction you created, with its files
+  retry ID              try again now to forward a transaction you sent to
+                        another server (after 'failed' in 'ftc outbox')
   inbox                 list transactions sent to you
   outbox                list transactions you sent
   show ID               show one transaction
@@ -46,7 +48,7 @@ Run 'ftc COMMAND --help' for the options of a command.
 
 const std::array kAll{
     &kLogin, &kLogout, &kSend, &kRecent, &kCreate, &kAdd, &kRm,
-    &kCommit, &kDelete, &kInbox, &kOutbox, &kShow, &kFiles, &kGet,
+    &kCommit, &kDelete, &kRetry, &kInbox, &kOutbox, &kShow, &kFiles, &kGet,
 };
 
 const Command* find(std::string_view name) {

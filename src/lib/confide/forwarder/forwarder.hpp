@@ -51,15 +51,17 @@ struct ForwarderOptions {
 //   PUT  /internal/transactions/{id}/files/{path*}   each file, streamed
 //   POST /internal/transactions/{id}/commit
 //
+// Every failed attempt is recorded in the transaction's ForwardInfo
+// (TransactionService::record_forward_failure), which the sender sees.
 // A failed push leaves the transaction `committed` and is retried with
 // exponential backoff while the error may go away by itself (network,
 // peer overloaded or failing: `unavailable`, `throttled`, `internal`,
 // `io`, `integrity`). Any other error (unknown user on the peer, wrong
 // peer token, ...) is logged, recorded as `forward_failed` in the business
-// log, and the transaction waits for the next start, since fixing it means
-// changing a config. A retry first asks the peer how
-// far the earlier push got, so files are sent again only into a
-// transaction that is still open there.
+// log, and the transaction waits for a retry (`ftc retry`, once fixed) or
+// the next start, since fixing it usually means changing a config. A retry
+// first asks the peer how far the earlier push got, so files are sent again
+// only into a transaction that is still open there.
 //
 // One worker thread pushes one transaction at a time. Thread-safe.
 class Forwarder {
@@ -73,9 +75,13 @@ public:
   Forwarder(Forwarder&&) = delete;
   Forwarder& operator=(Forwarder&&) = delete;
 
-  // Queues a transaction for pushing; ignored if it is queued already.
-  // Wired to TransactionService's CommitHook for remote targets.
-  void enqueue(const common::TransactionId& id);
+  // Queues a transaction for pushing after `delay` (now by default). If it
+  // is queued already, waiting for a retry, its wait is cut down to that; if
+  // it is being pushed right now and that push fails, it is tried once more
+  // after first_retry. Wired to TransactionService's on_committed (remote
+  // targets) and on_retry hooks.
+  void enqueue(const common::TransactionId& id,
+               std::chrono::milliseconds delay = std::chrono::milliseconds{0});
 
   // Queues every transaction still waiting from before
   // (TransactionService::list_outgoing()) and starts the worker thread.
@@ -105,6 +111,10 @@ private:
 
   // Whether failed attempt `item.attempts` with `code` goes to the log.
   bool should_log(const Pending& item, common::ErrCode code) const;
+  bool is_stopping() const;
+  // record_forward_failure(), with a warning if it could not be saved.
+  void record(const common::TransactionId& id, const common::Error& err,
+              std::optional<std::chrono::milliseconds> retry_in);
 
   void run();
   std::chrono::milliseconds backoff(std::uint32_t attempts) const;
@@ -120,6 +130,8 @@ private:
   std::deque<Pending> queue_;
   bool stop_ = false;
   net::HttpClient* active_ = nullptr;  // client of the push in progress, for stop()
+  std::optional<common::TransactionId> active_id_;  // transaction being pushed
+  bool retry_asked_ = false;  // enqueue(active_id_) came in during that push
   std::thread worker_;
 };
 

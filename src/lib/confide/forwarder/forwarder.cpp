@@ -66,16 +66,27 @@ bool Forwarder::is_transient(ErrCode code) {
   }
 }
 
-void Forwarder::enqueue(const common::TransactionId& id) {
+void Forwarder::enqueue(const common::TransactionId& id, std::chrono::milliseconds delay) {
   {
     const std::scoped_lock lock(mu_);
-    if (std::ranges::find(queue_, id, &Pending::id) != queue_.end()) {
+    if (active_id_ == id) {
+      // Being pushed right now. The worker may already have recorded this
+      // push as failed, so the request is kept: run() queues the transaction
+      // again if the push does not deliver it.
+      retry_asked_ = true;
       return;
     }
-    queue_.push_back(Pending{
-        .id = id, .attempts = 0, .due = std::chrono::steady_clock::now(), .logged = std::nullopt});
+    const auto due = std::chrono::steady_clock::now()
+                     + std::max(delay, std::chrono::milliseconds{0});
+    if (auto it = std::ranges::find(queue_, id, &Pending::id); it != queue_.end()) {
+      // Waiting for a retry: go sooner. `attempts` stays, so a failure after
+      // this continues the backoff instead of starting it over.
+      it->due = std::min(it->due, due);
+    } else {
+      queue_.push_back(Pending{.id = id, .attempts = 0, .due = due, .logged = std::nullopt});
+    }
   }
-  cv_.notify_all();
+  cv_.notify_all();  // the worker may sleep until a later due time
 }
 
 void Forwarder::start() {
@@ -131,6 +142,19 @@ std::chrono::milliseconds Forwarder::backoff(std::uint32_t attempts) const {
 bool Forwarder::should_log(const Pending& item, ErrCode code) const {
   const auto every = std::max<std::uint32_t>(options_.log_every, 1);
   return item.attempts == 1 || item.logged != code || item.attempts % every == 0;
+}
+
+bool Forwarder::is_stopping() const {
+  const std::scoped_lock lock(mu_);
+  return stop_;
+}
+
+void Forwarder::record(const common::TransactionId& id, const Error& err,
+                       std::optional<std::chrono::milliseconds> retry_in) {
+  if (auto saved = service_.record_forward_failure(id, err, retry_in); !saved) {
+    tlog_.warn(kTag, "{}: could not save the forwarding status: {}", id.str(),
+               describe(saved.error()));
+  }
 }
 
 Result<void> Forwarder::push(const common::TransactionId& id) {
@@ -227,12 +251,18 @@ void Forwarder::run() {
     }
     auto item = *next;
     queue_.erase(next);
+    active_id_ = item.id;
+    retry_asked_ = false;
     lock.unlock();
 
     const auto res = push(item.id);
+    bool requeue = false;
     if (!res) {
       const auto& err = res.error();
-      if (is_transient(err.code)) {
+      if (is_stopping()) {
+        // Cancelled by stop(): not a failure of the peer. The next start
+        // picks the transaction up again.
+      } else if (is_transient(err.code)) {
         ++item.attempts;
         const auto wait = backoff(item.attempts);
         item.due = std::chrono::steady_clock::now() + wait;
@@ -242,19 +272,31 @@ void Forwarder::run() {
                      std::chrono::duration_cast<std::chrono::seconds>(wait).count(),
                      describe(err));
         }
-        lock.lock();
-        if (!stop_) {
-          queue_.push_back(std::move(item));
-        }
-        continue;
+        record(item.id, err, wait);
+        requeue = true;
+      } else {
+        tlog_.error(kTag, "{} not forwarded, waits for a retry or the next start: {}",
+                    item.id.str(), describe(err));
+        record(item.id, err, std::nullopt);
       }
-      tlog_.error(kTag, "{} not forwarded, stays committed until the next start: {}", item.id.str(),
-                  describe(err));
-      service_.record_forward_failed(item.id, err);
     } else if (item.attempts > 0) {
       tlog_.info(kTag, "{} delivered after {} failed attempt(s)", item.id.str(), item.attempts);
     }
+
     lock.lock();
+    active_id_.reset();
+    if (!res && std::exchange(retry_asked_, false)) {
+      // A retry was asked for during this push, perhaps just after it was
+      // recorded as failed: one more attempt, but not at once, so asking
+      // over and over cannot turn into pushing over and over.
+      const auto soon = std::chrono::steady_clock::now() + options_.first_retry;
+      item.due = requeue ? std::min(item.due, soon) : soon;
+      requeue = true;
+    }
+    if (requeue && !stop_) {
+      // No duplicate: enqueue() did not queue it while it was active.
+      queue_.push_back(std::move(item));
+    }
   }
   tlog_.info(kTag, "stopped");
 }

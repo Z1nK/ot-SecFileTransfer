@@ -6,6 +6,7 @@
 #include "transaction/service_types.hpp"
 #include "transaction/transaction.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -107,6 +108,16 @@ public:
   // removes it), `gone` if expired. An upload in progress fails at its end.
   Result<void> discard(const Caller& caller, const common::TransactionId& id);
 
+  // Asks for another attempt to forward a committed transaction of the
+  // caller to its target server: after a `failed` push once the cause is
+  // fixed, or to cut a `retrying` wait short. Sets the status to `pending`,
+  // next_attempt_at to now or, if later, retry_min_interval after the last
+  // failed attempt, and calls ServiceOptions::on_retry. Asking again while
+  // it is `pending` changes nothing. Only the sender; `conflict` if the
+  // transaction is not waiting to be forwarded (open, local, delivered),
+  // `gone` if expired.
+  Result<Transaction> retry_forward(const Caller& caller, const common::TransactionId& id);
+
   // --- Reading ------------------------------------------------------------
 
   Result<Transaction> get(const Caller& caller, const common::TransactionId& id) const;
@@ -150,12 +161,18 @@ public:
   // committed yet, already delivered, expired, or local).
   Result<Transaction> outgoing(const common::TransactionId& id) const;
 
-  // committed -> delivered, after the peer confirmed the push.
+  // committed -> delivered, after the peer confirmed the push. Clears
+  // Transaction::forwarding.
   Result<void> mark_delivered(const common::TransactionId& id);
 
-  // Logs `forward_failed` for a push the forwarder gave up on. The
-  // transaction stays committed. Does nothing if it no longer exists.
-  void record_forward_failed(const common::TransactionId& id, const common::Error& err);
+  // Records a failed push in Transaction::forwarding, which the sender
+  // sees (the error code; err.detail only goes to the business log).
+  // `retry_in` set: the forwarder tries again after it (`retrying`);
+  // nullopt: it gave up until a retry or the next start (`failed`, also
+  // logged as `forward_failed`). Does nothing for a transaction that is no
+  // longer waiting to be forwarded (deleted, delivered, expired).
+  Result<void> record_forward_failure(const common::TransactionId& id, const common::Error& err,
+                                      std::optional<std::chrono::milliseconds> retry_in);
 
   // Transactions whose expires_at has passed, in any state.
   std::vector<common::TransactionId> list_expired() const;

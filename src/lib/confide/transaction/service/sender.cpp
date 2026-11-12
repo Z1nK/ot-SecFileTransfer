@@ -185,6 +185,55 @@ Result<Transaction> TransactionService::commit(const Caller& caller,
   return std::move(*committed);
 }
 
+Result<Transaction> TransactionService::retry_forward(const Caller& caller,
+                                                      const common::TransactionId& id) {
+  std::optional<Transaction> queued;
+  {
+    CFD_TRY(mu, lock_existing(id));
+    const std::scoped_lock lock(*mu);
+
+    auto found = repo_.find(id);
+    if (!found) {
+      return not_found(id);
+    }
+    auto tx = std::move(*found);
+    if (!is_sender(caller, tx)) {
+      return forbidden(id);
+    }
+    if (tx.state == State::expired) {
+      return fail(ErrCode::gone, "transaction has expired");
+    }
+    if (!is_outgoing(tx)) {
+      return fail(ErrCode::conflict,
+                  std::format("transaction {} is {}{}, not waiting to be forwarded", id.str(),
+                              to_string(tx.state),
+                              tx.target_server.empty() ? " for a local user" : ""));
+    }
+    // Keeps attempts and the last error: the sender still sees why it
+    // failed until the next attempt says otherwise. Already `pending`: the
+    // attempt is scheduled, asking again neither moves it nor writes.
+    if (tx.forwarding && tx.forwarding->status != ForwardStatus::pending) {
+      auto& fwd = *tx.forwarding;
+      auto at = clock_.now();
+      if (fwd.last_attempt_at) {
+        at = std::max(at, *fwd.last_attempt_at + options_.retry_min_interval);
+      }
+      if (fwd.status == ForwardStatus::retrying && fwd.next_attempt_at) {
+        at = std::min(at, *fwd.next_attempt_at);  // never later than it was going to be
+      }
+      fwd.status = ForwardStatus::pending;
+      fwd.next_attempt_at = at;
+      CFD_TRYV(repo_.save(tx));
+    }
+    queued = std::move(tx);
+  }
+
+  if (options_.on_retry) {
+    options_.on_retry(*queued);
+  }
+  return std::move(*queued);
+}
+
 Result<void> TransactionService::discard(const Caller& caller, const common::TransactionId& id) {
   return destroy(id, BizEventType::discarded, caller, [&](const Transaction& tx) -> Result<void> {
     // The sender only: not the target, and not the peer that pushed it.

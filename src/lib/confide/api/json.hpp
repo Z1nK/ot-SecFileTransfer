@@ -48,7 +48,13 @@ std::string encode_receive(const transaction::ReceiveRequest& req);
 //   {"id":"...","state":"open","sender":"alice","target_user":"bob",
 //    "target_server":"siteB","comment":"...","created_at":"...","expires_at":"...",
 //    "committed_at":"...","file_count":2,"total_bytes":12345}
-// Optional times are left out while unset.
+// Optional times are left out while unset. A committed transaction created
+// here for another server also has
+//   "forwarding":{"status":"pending|retrying|failed","attempts":3,
+//                 "last_attempt_at":"...","next_attempt_at":"...",
+//                 "error":"unknown_destination|forwarding_error"}
+// with the times and the error left out until there are some. The error is
+// one of those two only; the cause is in the server's logs.
 std::string encode_transaction(const transaction::Transaction& tx);
 
 // GET /transactions?box=in|out

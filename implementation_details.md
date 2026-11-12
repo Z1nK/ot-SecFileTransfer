@@ -767,6 +767,15 @@ worker thread on the sender's server that calls the peer's `/internal` API
 ```
 service.commit(alice, id)              // target_server = "siteB"
 └── on_committed(tx) -> forwarding.enqueue(id)        // after the lock is released
+service.retry_forward(alice, id)       // POST /transactions/{id}/retry, sender only
+├── forwarding.status = pending, next_attempt_at = max(now, last_attempt_at + 5 s)
+│     (retry_min_interval = the forwarder's first_retry; already pending: unchanged)
+└── on_retry(tx) -> forwarding.enqueue(id, next_attempt_at - now)
+
+Forwarder::enqueue(id, delay = 0)
+├── id being pushed right now (active_id_)  -> retry_asked_ = true
+├── id in the queue, waiting for a retry    -> due = min(due, now + delay) (attempts kept)
+└── otherwise                               -> appended, due = now + delay
 
 Forwarder::run()                       // one worker thread, one push at a time
 ├── wait until the earliest Pending.due (enqueue() and stop() wake it)
@@ -785,11 +794,30 @@ Forwarder::run()                       // one worker thread, one push at a time
 │   ├── POST /internal/transactions/{id}/commit     // peer re-hashes, logs `received`
 │   └── service.mark_delivered(id)     // committed -> delivered, blog `forwarded`
 └── on error:
+      cancelled by stop()  -> nothing recorded; queued again on next start
       unavailable / throttled / internal / io / integrity
           -> back into the queue, due in 5 s, 10 s, 20 s ... capped at 10 min
+             service.record_forward_failure(id, err, wait)   // status `retrying`
       anything else (unknown user on the peer, wrong peer token, ...)
-          -> tlog.error, dropped; stays `committed` and is queued again on next start
+          -> tlog.error, dropped; stays `committed` until a retry or the next start
+             service.record_forward_failure(id, err, nullopt) // `failed`, blog `forward_failed`
+      retry_asked_ (enqueue() of this id during the push)
+          -> queued once more, due in first_retry: a retry that arrives just
+             after the push was recorded as failed is not lost, and asking in
+             a loop does not become pushing in a loop
 ```
+
+`Transaction::forwarding` (`ForwardInfo`, in meta.json) is what the sender
+sees of this: status `pending` / `retrying` / `failed`, failed attempts so far
+(across restarts), last and next attempt time and the error code of the last
+failure. The error's detail (what the peer or the network said) is not kept
+there: it goes to the technical log and, for `forward_failed`, the business
+log. The API narrows the code further, to `unknown_destination` or
+`forwarding_error` (`public_forward_error()` in api/json.cpp), so a sender
+learns nothing about the servers' setup. It is not a `State`: the transaction stays `committed`, so
+retention, access rules and `list_outgoing()` do not change. The API shows it
+as `forwarding` on committed transactions created here for another server
+(`"status":"pending"` until an attempt failed); `mark_delivered()` clears it.
 
 `forwarding.start()` queues everything `service.list_outgoing()` returns, so
 a push cut short by a restart is redone. Every network operation of the
@@ -888,7 +916,7 @@ main: signal_io.run() returns -> server.wait() joins all threads
   `committed`, `received`, `downloaded`, `expired` (retention sweep),
   `forwarded` once the peer confirmed a push (`mark_delivered()`),
   `forward_failed` (`error`, `detail`) when the forwarder gives up on a push
-  until the next start (`record_forward_failed()`), and the
+  until a retry or the next start (`record_forward_failure()`), and the
   admin actions `admin_deleted`, `retention_changed` (`days`) and
   `sessions_revoked` (`user`, no `tx`). `GET /admin/log` reads it back with
   `logging::read_business_log()`.

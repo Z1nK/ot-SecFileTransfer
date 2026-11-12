@@ -67,6 +67,12 @@ Result<void> TransactionHandlers::register_routes(Router& router) {
           .fn = &TransactionHandlers::commit,
       },
       Def{
+          .method = verb::post,
+          .pattern = "/transactions/{id}/retry",
+          .access = Access::user,
+          .fn = &TransactionHandlers::retry,
+      },
+      Def{
           .method = verb::get,
           .pattern = "/transactions/{id}/files",
           .access = Access::user,
@@ -261,6 +267,18 @@ asio::awaitable<void> TransactionHandlers::commit(RequestContext& ctx) {
   }
   // Re-hashes every file (NFR-6): may take long for a large transaction.
   auto tx = co_await offload(ctx.blocking, [&] { return service_.commit(ctx.caller, *id); });
+  if (!tx) {
+    co_return co_await fail(ctx, tx.error());
+  }
+  co_await ctx.exchange.send(Response::json(http::status::ok, encode_transaction(*tx)));
+}
+
+asio::awaitable<void> TransactionHandlers::retry(RequestContext& ctx) {
+  auto id = id_param(ctx);
+  if (!id) {
+    co_return co_await fail(ctx, id.error());
+  }
+  auto tx = co_await offload(ctx.blocking, [&] { return service_.retry_forward(ctx.caller, *id); });
   if (!tx) {
     co_return co_await fail(ctx, tx.error());
   }

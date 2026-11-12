@@ -3,6 +3,8 @@
 #include <boost/json.hpp>
 
 #include <algorithm>
+#include <cstdint>
+#include <limits>
 #include <string>
 #include <utility>
 
@@ -149,6 +151,51 @@ Result<std::vector<FileEntry>> decode_files(const json::object& obj) {
   return files;
 }
 
+json::object encode_forwarding(const ForwardInfo& f) {
+  json::object obj{
+      {"status", to_string(f.status)},
+      {"attempts", f.attempts},
+  };
+  if (f.last_attempt_at) {
+    obj["last_attempt_at"] = common::format_iso8601(*f.last_attempt_at);
+  }
+  if (f.next_attempt_at) {
+    obj["next_attempt_at"] = common::format_iso8601(*f.next_attempt_at);
+  }
+  if (!f.error.empty()) {
+    obj["error"] = f.error;
+  }
+  return obj;
+}
+
+// Absent or null -> nullopt (older meta.json, or nothing to report).
+Result<std::optional<ForwardInfo>> decode_forwarding(const json::object& parent) {
+  const auto* v = parent.if_contains("forwarding");
+  if (v == nullptr || v->is_null()) {
+    return std::nullopt;
+  }
+  if (!v->is_object()) {
+    return invalid("forwarding: not an object");
+  }
+  const auto& obj = v->get_object();
+  CFD_TRY(status_text, get_string(obj, "status"));
+  CFD_TRY(status, in_field("forwarding.status", parse_forward_status(status_text)));
+  CFD_TRY(attempts, get_uint64(obj, "attempts"));
+  if (attempts > std::numeric_limits<std::uint32_t>::max()) {
+    return invalid("forwarding.attempts: too large");
+  }
+  CFD_TRY(last_attempt_at, get_optional_timestamp(obj, "last_attempt_at"));
+  CFD_TRY(next_attempt_at, get_optional_timestamp(obj, "next_attempt_at"));
+  CFD_TRY(error, get_optional_string(obj, "error"));
+  return ForwardInfo{
+      .status = status,
+      .attempts = static_cast<std::uint32_t>(attempts),
+      .last_attempt_at = last_attempt_at,
+      .next_attempt_at = next_attempt_at,
+      .error = std::string{error},
+  };
+}
+
 }  // namespace
 
 std::string encode_meta(const Transaction& tx) {
@@ -169,6 +216,9 @@ std::string encode_meta(const Transaction& tx) {
   }
   if (tx.delivered_at) {
     obj["delivered_at"] = common::format_iso8601(*tx.delivered_at);
+  }
+  if (tx.forwarding) {
+    obj["forwarding"] = encode_forwarding(*tx.forwarding);
   }
   obj["files"] = encode_files(tx.files);
   return json::serialize(obj);
@@ -192,6 +242,7 @@ Result<Transaction> decode_meta(std::string_view text) {
   CFD_TRY(committed_at, get_optional_timestamp(obj, "committed_at"));
   CFD_TRY(delivered_at, get_optional_timestamp(obj, "delivered_at"));
   CFD_TRY(files, decode_files(obj));
+  CFD_TRY(forwarding, decode_forwarding(obj));
 
   return Transaction{
       .id = std::move(id),
@@ -206,6 +257,7 @@ Result<Transaction> decode_meta(std::string_view text) {
       .committed_at = committed_at,
       .delivered_at = delivered_at,
       .files = std::move(files),
+      .forwarding = std::move(forwarding),
   };
 }
 

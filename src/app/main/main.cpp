@@ -223,6 +223,22 @@ Result<void> serve(const config::Config& cfg, const common::IClock& clock, loggi
   // so no commit can see it unset.
   forwarder::Forwarder* forward = nullptr;
 
+  // Received transactions have no target_server, so only our own remote
+  // ones are pushed: at once after a commit, and at forwarding.next_attempt_at
+  // after a retry_forward(), which keeps a minimum interval between attempts.
+  const auto to_forwarder = [&forward, &clock](const transaction::Transaction& tx) {
+    if (forward == nullptr || tx.target_server.empty()) {
+      return;
+    }
+    std::chrono::milliseconds delay{0};
+    if (tx.forwarding && tx.forwarding->next_attempt_at) {
+      delay = std::chrono::duration_cast<std::chrono::milliseconds>(
+          *tx.forwarding->next_attempt_at - clock.now());
+    }
+    forward->enqueue(tx.id, delay);
+  };
+  auto forward_options = forwarder_options(cfg);
+
   transaction::TransactionService service(
       repo, store, blog, clock,
       transaction::ServiceOptions{
@@ -233,17 +249,14 @@ Result<void> serve(const config::Config& cfg, const common::IClock& clock, loggi
           .is_recipient = [&dir = *directory](std::string_view user, std::string_view target) {
             return dir.is_member(user, target);
           },
-          // Received transactions have no target_server, so only our own
-          // remote ones are pushed.
-          .on_committed =
-              [&forward](const transaction::Transaction& tx) {
-                if (forward != nullptr && !tx.target_server.empty()) {
-                  forward->enqueue(tx.id);
-                }
-              },
+          .on_committed = to_forwarder,
+          // retry_forward() only accepts transactions waiting to be forwarded.
+          .on_retry = to_forwarder,
+          .retry_min_interval =
+              std::chrono::ceil<std::chrono::seconds>(forward_options.first_retry),
       });
 
-  forwarder::Forwarder forwarding(service, store, tlog, forwarder_options(cfg));
+  forwarder::Forwarder forwarding(service, store, tlog, std::move(forward_options));
   forward = &forwarding;
 
   api::TransactionHandlers handlers(service, blog, tlog);

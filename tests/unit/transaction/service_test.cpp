@@ -16,6 +16,7 @@ using confide::common::RelativePath;
 using confide::transaction::Box;
 using confide::transaction::Caller;
 using confide::transaction::CreateRequest;
+using confide::transaction::ForwardStatus;
 using confide::transaction::MembershipCheck;
 using confide::transaction::ServiceOptions;
 using confide::transaction::Transaction;
@@ -30,10 +31,13 @@ struct NullSink final : confide::logging::ILogSink {
   void write(confide::logging::LogLevel, std::string_view) override {}
 };
 
+// Stands still unless a test moves it.
 struct FixedClock final : confide::common::IClock {
   confide::common::Timestamp now() const override {
-    return confide::common::Timestamp{std::chrono::seconds{1'800'000'000}};
+    return confide::common::Timestamp{std::chrono::seconds{1'800'000'000}} + offset;
   }
+  void advance(std::chrono::seconds by) { offset += by; }
+  std::chrono::seconds offset{0};
 };
 
 // devs = {alice, bob}; carol sends, dave is an outsider.
@@ -65,7 +69,10 @@ protected:
                                                             .max_retention_days = 7,
                                                             .check_destination = std::move(check),
                                                             .is_recipient = std::move(is_recipient),
-                                                            .on_committed = {}});
+                                                            .on_committed = {},
+                                                            .on_retry = [this](const Transaction& tx) {
+                                                              retried_.push_back(tx.id);
+                                                            }});
   }
 
   // carol -> devs with one file, open.
@@ -88,6 +95,16 @@ protected:
   std::optional<TransactionRepository> repo_;
   std::unique_ptr<TransactionService> service_;
   RelativePath path_ = RelativePath::parse("a.txt").value();
+
+  // carol -> bob@siteB with one file, committed: waiting to be forwarded.
+  Transaction create_outgoing() {
+    auto tx = service_->create(carol_, CreateRequest{.target_user = "bob", .target_server = "siteB"});
+    EXPECT_TRUE(tx.has_value());
+    EXPECT_TRUE(service_->commit(carol_, tx->id).has_value());
+    return *tx;
+  }
+
+  std::vector<confide::common::TransactionId> retried_;  // on_retry calls
 
   Caller carol_{.name = "carol"};
   Caller alice_{.name = "alice"};
@@ -287,6 +304,109 @@ TEST_F(GroupTargetTest, DiscardEndsAnUploadInProgress) {
   ASSERT_TRUE(service_->discard(carol_, tx.id).has_value());
   EXPECT_EQ(up->finish().error().code, ErrCode::notfound);
   EXPECT_FALSE(store_->has_transaction(tx.id));
+}
+
+// The forwarder's failures end up on the transaction, where the sender sees
+// them; a delivery clears them.
+TEST_F(GroupTargetTest, ForwardFailuresAreRecordedForTheSender) {
+  using namespace std::chrono_literals;
+  const auto tx = create_outgoing();
+  const auto now = clock_.now();
+  EXPECT_FALSE(service_->get(carol_, tx.id).value().forwarding);
+
+  const auto down = confide::common::Error::make(ErrCode::unavailable, "connection refused");
+  ASSERT_TRUE(service_->record_forward_failure(tx.id, down, 30s).has_value());
+  auto fwd = service_->get(carol_, tx.id).value().forwarding;
+  ASSERT_TRUE(fwd);
+  EXPECT_EQ(fwd->status, ForwardStatus::retrying);
+  EXPECT_EQ(fwd->attempts, 1U);
+  EXPECT_EQ(fwd->last_attempt_at, now);
+  EXPECT_EQ(fwd->next_attempt_at, now + 30s);
+  EXPECT_EQ(fwd->error, "unavailable");
+  // What the network or the peer said is not kept where the sender reads.
+  EXPECT_EQ(store_->read_document(tx.id, confide::storage::Document::meta).value_or("").find("connection refused"), std::string::npos);
+
+  const auto refused = confide::common::Error::make(ErrCode::unknown_destination, "no such user");
+  ASSERT_TRUE(service_->record_forward_failure(tx.id, refused, std::nullopt).has_value());
+  fwd = service_->get(carol_, tx.id).value().forwarding;
+  ASSERT_TRUE(fwd);
+  EXPECT_EQ(fwd->status, ForwardStatus::failed);
+  EXPECT_EQ(fwd->attempts, 2U);
+  EXPECT_FALSE(fwd->next_attempt_at);
+  EXPECT_EQ(fwd->error, "unknown_destination");
+  // Still committed: a failed forward is not a state of the transaction.
+  EXPECT_EQ(service_->get(carol_, tx.id).value().state, confide::transaction::State::committed);
+
+  ASSERT_TRUE(service_->mark_delivered(tx.id).has_value());
+  const auto delivered = service_->get(carol_, tx.id).value();
+  EXPECT_EQ(delivered.state, confide::transaction::State::delivered);
+  EXPECT_FALSE(delivered.forwarding);
+
+  // A late failure report for a delivered transaction changes nothing.
+  ASSERT_TRUE(service_->record_forward_failure(tx.id, down, 30s).has_value());
+  EXPECT_FALSE(service_->get(carol_, tx.id).value().forwarding);
+  // Nor does one for a transaction that is gone.
+  EXPECT_TRUE(service_
+                  ->record_forward_failure(confide::common::TransactionId::generate(), down, 30s)
+                  .has_value());
+}
+
+TEST_F(GroupTargetTest, SenderRetriesForwarding) {
+  using namespace std::chrono_literals;
+  const auto tx = create_outgoing();
+  const auto refused = confide::common::Error::make(ErrCode::unknown_destination, "no such user");
+  ASSERT_TRUE(service_->record_forward_failure(tx.id, refused, std::nullopt).has_value());
+
+  const Caller peer{.name = "siteB", .is_peer = true};
+  for (const auto& other : {alice_, bob_, dave_, peer}) {
+    EXPECT_EQ(service_->retry_forward(other, tx.id).error().code, ErrCode::forbidden) << other.name;
+  }
+  EXPECT_TRUE(retried_.empty());
+
+  const auto again = service_->retry_forward(carol_, tx.id);
+  ASSERT_TRUE(again.has_value()) << again.error().detail;
+  EXPECT_EQ(retried_, std::vector{tx.id});
+  const auto fwd = service_->get(carol_, tx.id).value().forwarding;
+  ASSERT_TRUE(fwd);
+  EXPECT_EQ(fwd->status, ForwardStatus::pending);
+  EXPECT_EQ(fwd->attempts, 1U);              // kept
+  EXPECT_EQ(fwd->error, "unknown_destination");  // why the last one failed
+  // Not at once: a minimum interval after the attempt that just failed.
+  EXPECT_EQ(fwd->next_attempt_at, clock_.now() + 5s);
+
+  // Asking again while it is pending moves nothing.
+  clock_.advance(2s);
+  ASSERT_TRUE(service_->retry_forward(carol_, tx.id).has_value());
+  EXPECT_EQ(service_->get(carol_, tx.id).value().forwarding->next_attempt_at, fwd->next_attempt_at);
+  EXPECT_EQ(retried_.size(), 2U);
+
+  // Long after a failed attempt, a retry goes now.
+  ASSERT_TRUE(service_->record_forward_failure(tx.id, refused, std::nullopt).has_value());
+  clock_.advance(60s);
+  ASSERT_TRUE(service_->retry_forward(carol_, tx.id).has_value());
+  EXPECT_EQ(service_->get(carol_, tx.id).value().forwarding->next_attempt_at, clock_.now());
+
+  // While retrying, it is never put off beyond the attempt already planned.
+  const auto down = confide::common::Error::make(ErrCode::unavailable, "connection refused");
+  ASSERT_TRUE(service_->record_forward_failure(tx.id, down, 2s).has_value());
+  ASSERT_TRUE(service_->retry_forward(carol_, tx.id).has_value());
+  EXPECT_EQ(service_->get(carol_, tx.id).value().forwarding->next_attempt_at, clock_.now() + 2s);
+
+  ASSERT_TRUE(service_->mark_delivered(tx.id).has_value());
+  EXPECT_EQ(service_->retry_forward(carol_, tx.id).error().code, ErrCode::conflict);
+  EXPECT_EQ(service_->retry_forward(carol_, confide::common::TransactionId::generate())
+                .error()
+                .code,
+            ErrCode::notfound);
+}
+
+TEST_F(GroupTargetTest, OnlyOutgoingTransactionsCanBeRetried) {
+  const auto open = create_open();
+  EXPECT_EQ(service_->retry_forward(carol_, open.id).error().code, ErrCode::conflict);
+  ASSERT_TRUE(service_->commit(carol_, open.id).has_value());
+  // Committed, but for a local group: nothing to forward.
+  EXPECT_EQ(service_->retry_forward(carol_, open.id).error().code, ErrCode::conflict);
+  EXPECT_TRUE(retried_.empty());
 }
 
 TEST_F(GroupTargetTest, OutsidersAreForbidden) {

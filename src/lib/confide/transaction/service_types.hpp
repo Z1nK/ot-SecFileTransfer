@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <chrono>
 #include <functional>
 #include <optional>
 #include <string>
@@ -81,6 +82,11 @@ struct ServiceOptions {
   DestinationCheck check_destination;
   MembershipCheck is_recipient;  // may be empty: only exact name matches
   CommitHook on_committed;  // may be empty
+  CommitHook on_retry;      // after retry_forward(), outside the lock; may be empty
+  // retry_forward() schedules the attempt no sooner than this after the last
+  // failed one, so a sender cannot make the server hammer a peer. `main` sets
+  // it to the forwarder's first retry wait.
+  std::chrono::seconds retry_min_interval{5};
 };
 
 }  // namespace confide::transaction
