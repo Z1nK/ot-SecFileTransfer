@@ -403,7 +403,12 @@ TEST_F(ForwarderTest, WorkerKeepsRetryingWhileThePeerIsDown) {
   EXPECT_FALSE(lines_->contains("attempt 9 failed"));
   EXPECT_EQ(state_on_a(tx.id), State::committed);
   EXPECT_FALSE(site_a_->events->contains("forward_failed"));
-  // The sender sees why it has not arrived yet.
+  // The sender sees why it has not arrived yet. The attempt is recorded
+  // just after its log line, so wait for it.
+  EXPECT_TRUE(eventually([&] {
+    const auto seen = site_a_->service.get(alice_, tx.id).value().forwarding;
+    return seen && seen->attempts >= 10;
+  }));
   const auto fwd = site_a_->service.get(alice_, tx.id).value().forwarding;
   ASSERT_TRUE(fwd);
   EXPECT_EQ(fwd->status, ForwardStatus::retrying);
@@ -439,6 +444,11 @@ TEST_F(ForwarderTest, PermanentFailureLeavesTheQueue) {
   EXPECT_EQ(state_on_a(tx.id), State::committed);
   EXPECT_TRUE(eventually(
       [&] { return lines_->contains("not forwarded, waits for a retry or the next start"); }));
+  // Recorded just after that log line.
+  EXPECT_TRUE(eventually([&] {
+    const auto seen = site_a_->service.get(alice_, tx.id).value().forwarding;
+    return seen && seen->status == ForwardStatus::failed;
+  }));
   const auto fwd = site_a_->service.get(alice_, tx.id).value().forwarding;
   ASSERT_TRUE(fwd);
   EXPECT_EQ(fwd->status, ForwardStatus::failed);
@@ -459,7 +469,8 @@ TEST_F(ForwarderTest, RetryCutsTheBackoffShort) {
   forwarder_->start();
   const auto tx = send({{"a.txt", "hello"}});
   EXPECT_TRUE(eventually([&] { return lines_->contains("attempt 1 failed, retry in 3600s"); }));
-  EXPECT_EQ(forwarder_->queued(), 1U);
+  // Back in the queue a moment after that log line, once the attempt is recorded.
+  EXPECT_TRUE(eventually([&] { return forwarder_->queued() == 1; }));
 
   HttpServer late(ServerOptions{.bind = "127.0.0.1",
                                 .port = static_cast<std::uint16_t>(std::stoi(port)),
@@ -467,7 +478,7 @@ TEST_F(ForwarderTest, RetryCutsTheBackoffShort) {
                   router_, auth_, tlog_);
   ASSERT_TRUE(late.start());
   ASSERT_TRUE(site_a_->service.retry_forward(alice_, tx.id).has_value());  // -> enqueue
-  EXPECT_EQ(forwarder_->queued(), 1U);  // moved up, not added twice
+  EXPECT_LE(forwarder_->queued(), 1U);  // moved up (or taken already), not added twice
   EXPECT_TRUE(eventually([&] { return state_on_a(tx.id) == State::delivered; }));
   EXPECT_FALSE(site_a_->service.get(alice_, tx.id).value().forwarding);
   forwarder_.reset();
