@@ -18,7 +18,7 @@ set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 DATA=${XDG_DATA_HOME:-$HOME/.local/share}
 BIN=$HOME/.local/bin
-SYS_EXT=/usr/share/nautilus-python/extensions/ftc_nautilus.py
+EXT_NAME=nautilus-python/extensions/ftc_nautilus.py
 
 mode=auto
 restart=1
@@ -33,6 +33,65 @@ for arg in "$@"; do
 done
 
 warn() { echo "warning: $*" >&2; }
+
+# Copies of ftc_nautilus.py that Nautilus loads besides ours: it reads
+# nautilus-python/extensions/ in every XDG data folder, and each copy adds
+# its own menu items. One per line.
+other_extensions() {
+  local dirs=${XDG_DATA_DIRS:-/usr/local/share:/usr/share} d f
+  local -A seen=(["$(realpath -m "$DATA/$EXT_NAME")"]=1)
+  IFS=: read -ra dirs <<<"$dirs:/usr/local/share:/usr/share"
+  for d in "${dirs[@]}"; do
+    [[ -n $d ]] || continue
+    f=$(realpath -m "$d/$EXT_NAME")
+    [[ -e $f && -z ${seen[$f]:-} ]] || continue
+    seen[$f]=1
+    echo "$f"
+  done
+}
+
+# "old (Send only)" for the first version of the extension, else "current".
+extension_kind() {
+  if grep -q 'class FtcSendMenu' "$1" 2>/dev/null; then
+    echo "old version, Send only"
+  else
+    echo "same kind as this one"
+  fi
+}
+
+# The package a file belongs to, or nothing.
+owning_package() {
+  if command -v rpm >/dev/null; then
+    rpm -qf --qf '%{NAME}-%{VERSION}\n' "$1" 2>/dev/null && return
+  fi
+  if command -v dpkg >/dev/null; then
+    dpkg -S "$1" 2>/dev/null | cut -d: -f1 && return
+  fi
+  return 0
+}
+
+# Says loudly which other copies exist and how to remove them.
+report_duplicates() {
+  local f pkg found=0
+  while IFS= read -r f; do
+    [[ -n $f ]] || continue
+    if ((found == 0)); then
+      echo >&2
+      warn "Nautilus also loads other copies of the ftc extension, so menu items"
+      warn "(e.g. \"Send with ftc…\") will show more than once:"
+      found=1
+    fi
+    pkg=$(owning_package "$f")
+    if [[ -n $pkg ]]; then
+      warn "  $f  ($(extension_kind "$f"); from package $pkg)"
+      warn "      -> upgrade or remove $pkg, or run uninstall.sh to keep only the package"
+    else
+      warn "  $f  ($(extension_kind "$f"); not from a package)"
+      warn "      -> sudo rm '$f'"
+    fi
+  done < <(other_extensions)
+  ((found == 0)) || echo >&2
+}
 
 have_nautilus_python() {
   [[ -d /usr/share/nautilus-python ]] && return 0
@@ -52,16 +111,12 @@ fi
 
 case $mode in
   extension)
-    if [[ -e $SYS_EXT ]]; then
-      warn "$SYS_EXT exists (confide-client package): the menu items would show twice."
-      warn "Remove the package or run uninstall.sh afterwards."
-    fi
     install -Dm755 "$HERE/ftc-send-dialog" "$BIN/ftc-send-dialog"
     install -Dm755 "$HERE/ftc-get-dialog" "$BIN/ftc-get-dialog"
-    install -Dm644 "$HERE/ftc_nautilus.py" "$DATA/nautilus-python/extensions/ftc_nautilus.py"
+    install -Dm644 "$HERE/ftc_nautilus.py" "$DATA/$EXT_NAME"
     echo "installed $BIN/ftc-send-dialog"
     echo "installed $BIN/ftc-get-dialog"
-    echo "installed $DATA/nautilus-python/extensions/ftc_nautilus.py"
+    echo "installed $DATA/$EXT_NAME"
     case ":$PATH:" in
       *":$BIN:"*) ;;
       *) warn "$BIN is not in PATH: the menu items stay hidden until it is (log out and in again)." ;;
@@ -74,6 +129,10 @@ case $mode in
     echo "installed $DATA/nautilus/scripts/Get with ftc"
     ;;
 esac
+
+# Near the end, so it is not scrolled away: other copies of the extension
+# (with --scripts too, whose items would come on top of the extension's).
+report_duplicates
 
 # What the dialogs need at run time; see README.md, "Needs".
 command -v zenity >/dev/null || warn "zenity is not installed: the dialogs cannot open (see integrations/nautilus/README.md, \"Needs\")."

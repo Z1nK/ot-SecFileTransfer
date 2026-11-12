@@ -113,6 +113,17 @@ with apt/dnf.
 
 ## Troubleshooting
 
+- **"Send with ftc…" shows twice:** Nautilus loads `ftc_nautilus.py` from
+  `~/.local/share/nautilus-python/extensions/` *and* from the same folder
+  under every entry of `XDG_DATA_DIRS` (`/usr/local/share`, `/usr/share`,
+  …), typically the confide-client package plus a per-user install. Find
+  them with
+  `find / -name ftc_nautilus.py -path '*nautilus-python*' 2>/dev/null`
+  and keep one; `install.sh` and `uninstall.sh` list the other copies too.
+  A copy with `class FtcSendMenu` is the first version, with Send only.
+- **No "Get with ftc…" on files:** it is offered only on the empty space of
+  a folder ("Get with ftc…") or on a single selected folder ("Get with ftc
+  into folder…"), not on files.
 - **No menu item:** run `nautilus -q; nautilus` in a terminal and look for
   Python errors. An item is hidden when its helper (`ftc-send-dialog`,
   `ftc-get-dialog`) is not in `PATH`, or the selection or folder is not

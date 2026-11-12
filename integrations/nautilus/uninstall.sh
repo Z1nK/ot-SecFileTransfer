@@ -9,7 +9,7 @@ set -euo pipefail
 
 DATA=${XDG_DATA_HOME:-$HOME/.local/share}
 BIN=$HOME/.local/bin
-SYS_EXT=/usr/share/nautilus-python/extensions/ftc_nautilus.py
+EXT_NAME=nautilus-python/extensions/ftc_nautilus.py
 
 restart=1
 for arg in "$@"; do
@@ -38,9 +38,27 @@ for f in "${files[@]}"; do
 done
 [[ $removed == 0 ]] && echo "Nothing to remove: the integration is not installed for $USER."
 
-if [[ -e $SYS_EXT ]]; then
-  echo "note: $SYS_EXT is installed by the confide-client package; remove that with apt/dnf."
-fi
+# Copies outside $DATA that Nautilus still loads (every XDG data folder),
+# e.g. from the confide-client package or an old manual install.
+declare -A seen=()
+IFS=: read -ra dirs <<<"${XDG_DATA_DIRS:-/usr/local/share:/usr/share}:/usr/local/share:/usr/share"
+for d in "${dirs[@]}"; do
+  [[ -n $d ]] || continue
+  f=$(realpath -m "$d/$EXT_NAME")
+  [[ -e $f && -z ${seen[$f]:-} ]] || continue
+  seen[$f]=1
+  pkg=""
+  if command -v rpm >/dev/null; then
+    pkg=$(rpm -qf --qf '%{NAME}\n' "$f" 2>/dev/null) || pkg=""
+  elif command -v dpkg >/dev/null; then
+    pkg=$(dpkg -S "$f" 2>/dev/null | cut -d: -f1) || pkg=""
+  fi
+  if [[ -n $pkg ]]; then
+    echo "note: $f stays: it belongs to package $pkg (remove that with apt/dnf)."
+  else
+    echo "note: $f stays: not installed by this script (sudo rm '$f' to remove it)."
+  fi
+done
 
 if [[ $removed -gt 0 ]]; then
   if [[ $restart == 1 ]] && pgrep -x nautilus >/dev/null 2>&1; then
