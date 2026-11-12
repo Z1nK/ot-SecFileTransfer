@@ -14,13 +14,14 @@ Each release is split into two parts:
 ### Business logic
 
 #### Added
-- **GNOME Files (Nautilus): "Get with ftc…"** on the background of a folder (and "Get with ftc into folder…" on a selected folder) opens a dialog (`ftc-get-dialog`, zenity) that lists the downloadable transactions of the inbox (committed and delivered), logs in if needed and runs `ftc get` for the chosen ones into that folder. Existing files are overwritten only after asking. Installed with the client package as `bin/ftc-get-dialog`.
+- **GNOME Files (Nautilus): "Get with ftc…"** on the background of a folder (and "Get with ftc into folder…" on a selected folder) opens a dialog (`ftc-get-dialog`, zenity) that lists the downloadable transactions of the inbox (committed and delivered), logs in if needed and runs `ftc get` for the chosen ones into that folder. Existing files are overwritten only after asking. Installed with the `confide-client-nautilus` package as `bin/ftc-get-dialog`.
 - **Nautilus integration: `install.sh` / `uninstall.sh`** in `integrations/nautilus/` install and remove the menu items for the current user without the package (the nautilus-python extension, or Nautilus scripts when nautilus-python is missing) and warn about missing dependencies.
 - **A sender can delete their own open transaction**: `DELETE /transactions/{id}` and `ftc delete ID` remove it with its files and log `discarded`. Only the sender, and only while it is `open`; once committed it answers 409 and stays until retention or an admin removes it. `ftc send` names the command when it leaves a transaction open after a failed upload.
 - **`rest.max_upload_bytes`** sets the largest single file a client or peer may upload; a larger one is refused with 400 from its `Content-Length`, before any of it is read. Default `0` = no limit, as before.
 - **`origin_server` in transaction JSON.** Users now see which server a received transaction came from (it was admin-only), and `ftc inbox` shows the sender as `alice@siteA` for those: `alice` alone could not be told from the alice of one's own server.
 
 #### Changed
+- **The Nautilus integration is a package of its own: `confide-client-nautilus`** (`.deb` arch `all`, `.rpm` `noarch`) with `ftc-send-dialog`, `ftc-get-dialog` and `ftc_nautilus.py`. `confide-client` now holds only `ftc`, so servers and headless VMs get no desktop files. The new package requires `confide-client` of the same version and `zenity`, and recommends nautilus-python and libnotify; install it next to `confide-client` on desktops. Upgrading from 0.7.6, where the files were in `confide-client`, moves them over.
 - **A peer's push is checked like local input.** The sender name must follow the rule for user names (1-64 chars of `[A-Za-z0-9._-]`), and an expiry beyond this server's `retention.max_days` is shortened to it.
 - **Old failed logins are forgotten.** A user, address or pair with no failed login for an hour starts again at zero.
 
@@ -33,6 +34,7 @@ Each release is split into two parts:
 ### Technical
 
 #### Changed
+- Packaging: new CPack component `nautilus` → `confide-client-nautilus` (Linux only). The release workflow collects the `noarch` RPM too, installs the other packages first and checks that no integration files or zenity come with them, then installs `confide-client-nautilus` on top.
 - `transaction::DestinationCheck` returns the target name to store; `auth::IUserDirectory` has `canonical_user()`; `is_valid_name` moved to `common/name.hpp` so `transaction` can use it without `config`.
 - `TransactionService::lock_existing()` replaces `lock_for()` wherever the id comes from a request.
 

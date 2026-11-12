@@ -75,7 +75,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: packages-deb
-          # confide, confide-utils and confide-client
+          # confide, confide-utils, confide-client (amd64) and
+          # confide-client-nautilus (all)
           path: ${{ env.BUILD_DIR }}/*_${{ env.VERSION }}_*.deb
           if-no-files-found: error
           retention-days: 1
@@ -169,7 +170,7 @@ jobs:
       - name: Inspect packages
         working-directory: ${{ env.BUILD_DIR }}
         run: |
-          for rpm in ./*-${{ env.VERSION }}-*.el${{ matrix.el }}.x86_64.rpm; do
+          for rpm in ./*-${{ env.VERSION }}-*.el${{ matrix.el }}.*.rpm; do
             echo "== $rpm"
             rpm -qpi "$rpm"
             rpm -qpl "$rpm"
@@ -184,8 +185,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: packages-rpm-el${{ matrix.el }}
-          # confide, confide-utils and confide-client
-          path: ${{ env.BUILD_DIR }}/*-${{ env.VERSION }}-*.el${{ matrix.el }}.x86_64.rpm
+          # confide, confide-utils, confide-client (x86_64) and
+          # confide-client-nautilus (noarch)
+          path: ${{ env.BUILD_DIR }}/*-${{ env.VERSION }}-*.el${{ matrix.el }}.*.rpm
           if-no-files-found: error
           retention-days: 1
 
@@ -209,8 +211,13 @@ jobs:
         with:
           name: packages-rpm-el${{ matrix.el }}
 
+      # As on a headless VM: everything but the desktop integration, which
+      # must then be absent.
       - name: Install
-        run: dnf -y install ./*.rpm
+        run: |
+          dnf -y install $(ls ./*.rpm | grep -v nautilus)
+          if rpm -q zenity; then echo "::error::zenity installed without the integration"; exit 1; fi
+          test ! -e /usr/bin/ftc-send-dialog
 
       - name: Run binaries
         run: |
@@ -224,6 +231,16 @@ jobs:
           test "$(stat -c '%U:%G %a' /etc/confide/server.toml)" = "root:confide 640"
           rpm -qc confide | grep -Fx /etc/confide/server.toml
           test -f /usr/lib/systemd/system/confide-server.service
+
+      # The desktop integration on top: pulls in zenity, needs the same ftc.
+      - name: Install desktop integration
+        run: |
+          dnf -y install ./confide-client-nautilus-*.rpm
+          rpm -q zenity
+          test -x /usr/bin/ftc-send-dialog
+          test -x /usr/bin/ftc-get-dialog
+          test -f /usr/share/nautilus-python/extensions/ftc_nautilus.py
+          test ! -e /usr/share/nautilus-python/extensions/__pycache__
 
   release:
     name: Release

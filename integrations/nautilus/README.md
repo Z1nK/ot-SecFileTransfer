@@ -31,8 +31,10 @@ On every distribution:
 - nautilus-python for the top-level menu item (optional; without it, use the
   helper as a Nautilus script, see below).
 
-The `confide-client` package only *suggests* these, so they are not
-installed with it. Check the Nautilus version with `nautilus --version`. The
+The `confide-client-nautilus` package requires `zenity` and recommends
+the other two (installed by default with apt and dnf, if the repositories
+have them). Installing by hand, put them in place yourself, as below. Check
+the Nautilus version with `rpm -q nautilus` / `dpkg -l nautilus`. The
 extension works with both the old API (Nautilus 3.x–42) and the new one (43+).
 
 ### Debian / Ubuntu
@@ -59,8 +61,9 @@ dnf info nautilus-python               # is it available?
   RHEL, the `epel-release` RPM from the Fedora project) and try again. If
   it is not there either, use the Nautilus script fallback below. It needs
   only zenity.
-- dnf does not install the packages that `confide-client` suggests, so
-  install the ones above yourself.
+- If nautilus-python is missing, `confide-client-nautilus` still installs
+  (it is only recommended), but the top-level menu items stay away; use the
+  Nautilus script fallback below.
 - RHEL 8 (GNOME 3.28) may not read `~/.config/environment.d/` for the
   desktop session. If the dialog says "No ftc server configured", put
   `export FTC_SERVER=https://...` in `~/.bash_profile` instead and log in
@@ -68,10 +71,20 @@ dnf info nautilus-python               # is it available?
 
 ## Install
 
-From the `confide-client` package, all files are already in place
-(`/usr/bin/ftc-send-dialog`, `/usr/bin/ftc-get-dialog`,
-`/usr/share/nautilus-python/extensions/`);
-only restart Nautilus: `nautilus -q`.
+The integration is a package of its own, `confide-client-nautilus`, so that
+`confide-client` (only `ftc`) stays free of desktop files on servers and
+headless VMs. On a desktop:
+
+```sh
+sudo dnf install ./confide-client-*.rpm ./confide-client-nautilus-*.rpm   # RHEL / Fedora
+sudo apt install ./confide-client_*.deb ./confide-client-nautilus_*.deb   # Debian / Ubuntu
+nautilus -q
+```
+
+It puts `/usr/bin/ftc-send-dialog`, `/usr/bin/ftc-get-dialog` and
+`/usr/share/nautilus-python/extensions/ftc_nautilus.py` in place and needs
+the `confide-client` of the same version. Up to 0.7.6 these files were in
+`confide-client` itself.
 
 Without the package, for one user (no sudo), from this folder:
 
@@ -108,15 +121,16 @@ selected, else into the folder being shown.
 ```
 
 removes the files of both variants from your home and restarts Nautilus.
-Files from the `confide-client` package are left alone; remove the package
-with apt/dnf.
+Files from the `confide-client-nautilus` package are left alone; remove the
+package with apt/dnf.
 
 ## Troubleshooting
 
 - **"Send with ftc…" shows twice:** Nautilus loads `ftc_nautilus.py` from
   `~/.local/share/nautilus-python/extensions/` *and* from the same folder
   under every entry of `XDG_DATA_DIRS` (`/usr/local/share`, `/usr/share`,
-  …), typically the confide-client package plus a per-user install. Find
+  …), typically the package (`confide-client-nautilus`, or `confide-client`
+  0.7.6) plus a per-user install. Find
   them with
   `find / -name ftc_nautilus.py -path '*nautilus-python*' 2>/dev/null`
   and keep one; `install.sh` and `uninstall.sh` list the other copies too.

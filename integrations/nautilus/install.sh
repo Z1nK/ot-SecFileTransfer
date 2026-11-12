@@ -10,7 +10,7 @@
 #   (neither)     --extension if nautilus-python is installed, else --scripts
 #   --no-restart  do not run `nautilus -q` at the end
 #
-# Not needed with the confide-client package, which installs everything
+# Not needed with the confide-client-nautilus package, which installs everything
 # system-wide. Undo with uninstall.sh.
 
 set -euo pipefail

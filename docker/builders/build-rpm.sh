@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Build the confide RPMs locally, the same way the `build-rpm` / `test-rpm`
 # jobs in .github/workflows/release.yaml do, but from the current working tree
-# (uncommitted changes included). Packages are copied to <repo>/dist/elN/.
+# (uncommitted changes included). Packages are copied to <repo>/dist/elN/:
+# confide, confide-utils, confide-client (x86_64) and confide-client-nautilus
+# (noarch, the GNOME Files integration).
 #
 # Usage: docker/builders/build-rpm.sh [options] [8|9|all]   (default: all)
 #   -v, --version X.Y.Z   package version (default: APP_VERSION from CMakeLists.txt)
@@ -21,7 +23,7 @@ INSTALL_TEST=1
 NO_CACHE=()
 TARGETS=()
 
-usage() { sed -n '2,13s/^# \{0,1\}//p' "$0"; }
+usage() { sed -n '2,15s/^# \{0,1\}//p' "$0"; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -100,8 +102,20 @@ build_el() {
 
       # Boost must be linked statically; the rest must be EL system libraries.
       shopt -s nullglob
-      rpms=(./*-"$VERSION"-*.el"$EL".x86_64.rpm)
+      rpms=(./*-"$VERSION"-*.el"$EL".*.rpm)
       [[ ${#rpms[@]} -gt 0 ]] || { echo "no RPMs produced" >&2; exit 1; }
+      # The desktop integration is its own noarch package; confide-client
+      # must be the bare ftc (for servers and headless VMs).
+      for name in confide confide-utils confide-client; do
+        ls ./"$name-$VERSION"-*.el"$EL".x86_64.rpm >/dev/null \
+          || { echo "ERROR: no $name x86_64 RPM" >&2; exit 1; }
+      done
+      ls ./confide-client-nautilus-"$VERSION"-*.el"$EL".noarch.rpm >/dev/null \
+        || { echo "ERROR: no confide-client-nautilus noarch RPM" >&2; exit 1; }
+      if rpm -qpl ./confide-client-"$VERSION"-*.el"$EL".x86_64.rpm | grep -E "dialog|nautilus"; then
+        echo "ERROR: confide-client contains desktop integration files" >&2
+        exit 1
+      fi
       for rpm in "${rpms[@]}"; do
         echo "== $rpm"
         rpm -qpi "$rpm"
@@ -119,7 +133,11 @@ build_el() {
   if [[ "$INSTALL_TEST" == 1 ]]; then
     echo "==> [EL$el] install test on rockylinux:$el"
     docker run --rm -v "$out:/rpms:ro" "rockylinux:$el" bash -euo pipefail -c '
-      dnf -y install /rpms/*.rpm
+      # As on a headless VM: everything but the desktop integration, which
+      # must then be absent.
+      dnf -y install $(ls /rpms/*.rpm | grep -v nautilus)
+      if rpm -q zenity; then echo "ERROR: zenity installed without the integration" >&2; exit 1; fi
+      test ! -e /usr/bin/ftc-send-dialog
       confide-server --version
       ftc --help
       echo secret | confide-passwd
@@ -127,6 +145,14 @@ build_el() {
       test "$(stat -c "%U:%G %a" /etc/confide/server.toml)" = "root:confide 640"
       rpm -qc confide | grep -Fx /etc/confide/server.toml
       test -f /usr/lib/systemd/system/confide-server.service
+
+      # The desktop integration on top: pulls in zenity, needs the same ftc.
+      dnf -y install /rpms/confide-client-nautilus-*.rpm
+      rpm -q zenity
+      test -x /usr/bin/ftc-send-dialog
+      test -x /usr/bin/ftc-get-dialog
+      test -f /usr/share/nautilus-python/extensions/ftc_nautilus.py
+      test ! -e /usr/share/nautilus-python/extensions/__pycache__
       echo "install test OK"
     '
   fi

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Remove the per-user Nautilus integration of ftc put in place by install.sh
 # (both the extension and the Nautilus script variants). Leaves files from
-# the confide-client package under /usr alone.
+# the confide-client-nautilus package under /usr alone.
 #
 #   uninstall.sh [--no-restart]
 
@@ -39,7 +39,8 @@ done
 [[ $removed == 0 ]] && echo "Nothing to remove: the integration is not installed for $USER."
 
 # Copies outside $DATA that Nautilus still loads (every XDG data folder),
-# e.g. from the confide-client package or an old manual install.
+# e.g. from the confide-client-nautilus package (confide-client up to 0.7.6)
+# or an old manual install.
 declare -A seen=()
 IFS=: read -ra dirs <<<"${XDG_DATA_DIRS:-/usr/local/share:/usr/share}:/usr/local/share:/usr/share"
 for d in "${dirs[@]}"; do
