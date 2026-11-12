@@ -37,6 +37,10 @@ struct ForwarderOptions {
   // Wait before the first retry; doubles per failed attempt up to max_retry.
   std::chrono::milliseconds first_retry{std::chrono::seconds{5}};
   std::chrono::milliseconds max_retry{std::chrono::minutes{10}};
+  // A failed attempt is logged when it is the first, when its error code
+  // differs from the last one logged, and every this many attempts, so a
+  // peer that stays down does not fill the log. 1 logs every attempt.
+  std::uint32_t log_every{10};
 };
 
 // FR-10, one-hop forwarding (Architecture §7): pushes each committed
@@ -95,7 +99,11 @@ private:
     common::TransactionId id;
     std::uint32_t attempts = 0;
     std::chrono::steady_clock::time_point due;
+    std::optional<common::ErrCode> logged;  // code of the last failure logged
   };
+
+  // Whether failed attempt `item.attempts` with `code` goes to the log.
+  bool should_log(const Pending& item, common::ErrCode code) const;
 
   void run();
   std::chrono::milliseconds backoff(std::uint32_t attempts) const;

@@ -72,7 +72,8 @@ void Forwarder::enqueue(const common::TransactionId& id) {
     if (std::ranges::find(queue_, id, &Pending::id) != queue_.end()) {
       return;
     }
-    queue_.push_back(Pending{.id = id, .attempts = 0, .due = std::chrono::steady_clock::now()});
+    queue_.push_back(Pending{
+        .id = id, .attempts = 0, .due = std::chrono::steady_clock::now(), .logged = std::nullopt});
   }
   cv_.notify_all();
 }
@@ -125,6 +126,11 @@ std::chrono::milliseconds Forwarder::backoff(std::uint32_t attempts) const {
     wait *= 2;
   }
   return std::min(wait, options_.max_retry);
+}
+
+bool Forwarder::should_log(const Pending& item, ErrCode code) const {
+  const auto every = std::max<std::uint32_t>(options_.log_every, 1);
+  return item.attempts == 1 || item.logged != code || item.attempts % every == 0;
 }
 
 Result<void> Forwarder::push(const common::TransactionId& id) {
@@ -230,8 +236,12 @@ void Forwarder::run() {
         ++item.attempts;
         const auto wait = backoff(item.attempts);
         item.due = std::chrono::steady_clock::now() + wait;
-        tlog_.warn(kTag, "{} attempt {} failed, retry in {}s: {}", item.id.str(), item.attempts,
-                   std::chrono::duration_cast<std::chrono::seconds>(wait).count(), describe(err));
+        if (should_log(item, err.code)) {
+          item.logged = err.code;
+          tlog_.warn(kTag, "{} attempt {} failed, retry in {}s: {}", item.id.str(), item.attempts,
+                     std::chrono::duration_cast<std::chrono::seconds>(wait).count(),
+                     describe(err));
+        }
         lock.lock();
         if (!stop_) {
           queue_.push_back(std::move(item));

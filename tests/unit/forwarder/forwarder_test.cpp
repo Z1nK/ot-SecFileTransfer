@@ -385,9 +385,32 @@ TEST_F(ForwarderTest, WorkerKeepsRetryingWhileThePeerIsDown) {
   make_forwarder(closed_port());
   forwarder_->start();
   const auto tx = send({{"a.txt", "hello"}});
-  // Tried again after each of the 50-200 ms backoffs.
-  EXPECT_TRUE(eventually([&] { return lines_->contains("attempt 3 failed"); }));
+  // Tried again after each of the 50-200 ms backoffs; the log has the first
+  // failure and every 10th, not each one.
+  EXPECT_TRUE(eventually([&] { return lines_->contains("attempt 10 failed"); }));
+  EXPECT_TRUE(lines_->contains("attempt 1 failed"));
+  EXPECT_FALSE(lines_->contains("attempt 2 failed"));
+  EXPECT_FALSE(lines_->contains("attempt 9 failed"));
   EXPECT_EQ(state_on_a(tx.id), State::committed);
+  EXPECT_FALSE(site_a_->events->contains("forward_failed"));
+}
+
+TEST_F(ForwarderTest, DeliveryAfterFailuresSaysSo) {
+  // Site B is down at first, then comes up on the port the forwarder tries.
+  const auto port = closed_port();
+  make_forwarder(port);
+  forwarder_->start();
+  const auto tx = send({{"a.txt", "hello"}});
+  EXPECT_TRUE(eventually([&] { return lines_->contains("attempt 1 failed"); }));
+
+  HttpServer late(ServerOptions{.bind = "127.0.0.1",
+                                .port = static_cast<std::uint16_t>(std::stoi(port)),
+                                .threads = 1},
+                  router_, auth_, tlog_);
+  ASSERT_TRUE(late.start());
+  EXPECT_TRUE(eventually([&] { return state_on_a(tx.id) == State::delivered; }));
+  EXPECT_TRUE(lines_->contains(tx.id.str() + " delivered after "));
+  forwarder_.reset();
 }
 
 TEST_F(ForwarderTest, PermanentFailureLeavesTheQueue) {
