@@ -232,6 +232,14 @@ jobs:
           rpm -qc confide | grep -Fx /etc/confide/server.toml
           test -f /usr/lib/systemd/system/confide-server.service
 
+      # ftc's system config: readable by every user, a noreplace config file,
+      # and ftc runs with it as installed (everything commented out).
+      - name: Check client files
+        run: |
+          test "$(stat -c '%U:%G %a' /etc/ftc/ftc.toml)" = "root:root 644"
+          rpm -qc confide-client | grep -Fx /etc/ftc/ftc.toml
+          ftc config | grep -F /etc/ftc/ftc.toml
+
       # The desktop integration on top: pulls in zenity, needs the same ftc.
       - name: Install desktop integration
         run: |

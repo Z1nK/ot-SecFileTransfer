@@ -46,6 +46,13 @@ install(FILES config/server.example.toml
 install(FILES packaging/confide-server.service
         DESTINATION lib/systemd/system COMPONENT server)
 
+# ftc's system config (FTC_CONFIG_DIR above), all settings commented out:
+# admins fill in the server and CA for every user of the machine.
+if(UNIX)
+  install(FILES config/ftc.example.toml
+          DESTINATION ${FTC_CONFIG_DIR} RENAME ftc.toml COMPONENT client)
+endif()
+
 # Desktop integration of ftc (integrations/): the GNOME Files menu items and
 # the dialogs they start. A package of its own (confide-client-nautilus), so
 # confide-client stays the bare ftc binary on servers and headless VMs.
@@ -61,7 +68,7 @@ endif()
 # Packaging: one .deb/.rpm per install() COMPONENT
 #   server -> confide         (confide-server)
 #   utils  -> confide-utils   (confide-passwd)
-#   client -> confide-client  (ftc)
+#   client -> confide-client  (ftc, /etc/ftc/ftc.toml)
 #   nautilus -> confide-client-nautilus  (GNOME Files menu items; Linux only)
 # -----------------------------------------------------------------------------
 set(CPACK_GENERATOR DEB)
@@ -116,6 +123,10 @@ set(CPACK_DEBIAN_SERVER_PACKAGE_CONTROL_EXTRA
   ${CMAKE_CURRENT_SOURCE_DIR}/packaging/deb/postrm)
 set(CPACK_DEBIAN_PACKAGE_CONTROL_STRICT_PERMISSION ON)
 
+# confide-client: /etc/ftc/ftc.toml is a conffile too.
+set(CPACK_DEBIAN_CLIENT_PACKAGE_CONTROL_EXTRA
+  ${CMAKE_CURRENT_SOURCE_DIR}/packaging/deb/client/conffiles)
+
 # RPM (EL8/EL9 CI jobs run `cpack -G RPM`): same components,
 # <name>-<version>-1.el<N>.<arch>.rpm, Requires: from the linked shared libraries.
 set(CPACK_RPM_COMPONENT_INSTALL ON)
@@ -147,6 +158,10 @@ set(CPACK_RPM_SERVER_POST_UNINSTALL_SCRIPT_FILE ${CMAKE_CURRENT_SOURCE_DIR}/pack
 set(CPACK_RPM_SERVER_USER_FILELIST
   "%dir %attr(0750,root,confide) /etc/confide"
   "%config(noreplace) %attr(0640,root,confide) /etc/confide/server.toml")
+# confide-client: readable by every user, kept on upgrade if edited.
+set(CPACK_RPM_CLIENT_USER_FILELIST
+  "%dir %attr(0755,root,root) ${FTC_CONFIG_DIR}"
+  "%config(noreplace) %attr(0644,root,root) ${FTC_SYSTEM_CONFIG}")
 # Owned by systemd, not by us.
 set(CPACK_RPM_EXCLUDE_FROM_AUTO_FILELIST_ADDITION /usr/lib/systemd /usr/lib/systemd/system)
 
