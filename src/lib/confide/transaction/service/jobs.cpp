@@ -2,7 +2,9 @@
 #include "transaction/state_machine.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <mutex>
+#include <string>
 #include <vector>
 
 namespace confide::transaction {
@@ -36,7 +38,7 @@ Result<Transaction> TransactionService::outgoing(const common::TransactionId& id
 }
 
 Result<void> TransactionService::mark_delivered(const common::TransactionId& id) {
-  const auto mu = lock_for(id);
+  CFD_TRY(mu, lock_existing(id));
   const std::scoped_lock lock(*mu);
 
   auto tx = repo_.find(id);
@@ -46,12 +48,49 @@ Result<void> TransactionService::mark_delivered(const common::TransactionId& id)
   CFD_TRYV(check_transition(tx->state, State::delivered));
   tx->state = State::delivered;
   tx->delivered_at = clock_.now();
+  tx->forwarding.reset();
   CFD_TRYV(repo_.save(*tx));
 
   auto ev = event_for(BizEventType::forwarded, *tx, Caller{.name = "system", .is_peer = false});
   ev.file_count = static_cast<std::uint32_t>(tx->files.size());
   ev.total_bytes = tx->total_bytes();
   blog_.record(ev);
+  return {};
+}
+
+Result<void> TransactionService::record_forward_failure(
+    const common::TransactionId& id, const common::Error& err,
+    std::optional<std::chrono::milliseconds> retry_in) {
+  auto mu = lock_existing(id);
+  if (!mu) {
+    return {};  // deleted meanwhile
+  }
+  const std::scoped_lock lock(**mu);
+
+  auto tx = repo_.find(id);
+  if (!tx || !is_outgoing(*tx)) {
+    return {};
+  }
+  const auto now = clock_.now();
+  auto& fwd = tx->forwarding ? *tx->forwarding : tx->forwarding.emplace();
+  fwd.attempts += 1;
+  fwd.last_attempt_at = now;
+  fwd.error = std::string{common::to_string(err.code)};
+  if (retry_in) {
+    fwd.status = ForwardStatus::retrying;
+    fwd.next_attempt_at = now + std::chrono::duration_cast<common::Timestamp::duration>(*retry_in);
+  } else {
+    fwd.status = ForwardStatus::failed;
+    fwd.next_attempt_at.reset();
+  }
+  CFD_TRYV(repo_.save(*tx));
+
+  if (!retry_in) {
+    auto ev = event_for(BizEventType::forward_failed, *tx, Caller{.name = "system", .is_peer = false});
+    ev.error = fwd.error;
+    ev.detail = err.detail;  // for the administrator; not kept on the transaction
+    blog_.record(ev);
+  }
   return {};
 }
 

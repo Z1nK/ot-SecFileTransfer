@@ -7,6 +7,7 @@ add_library(${LOCAL_LIB_NAME} STATIC
   outgoing.cpp
   recent_recipients.cpp
   reply.cpp
+  settings.cpp
   token_cache.cpp
 )
 
@@ -35,6 +36,14 @@ target_link_libraries(${LOCAL_LIB_NAME} PUBLIC
   Boost::headers
   Boost::json
 )
+
+# settings.cpp: config files are TOML, as for the server. The system file's
+# path is set at build time (FTC_SYSTEM_CONFIG in the top CMakeLists.txt).
+target_link_libraries(${LOCAL_LIB_NAME} PRIVATE toml11::toml11)
+if (NOT WIN32)
+  target_compile_definitions(${LOCAL_LIB_NAME} PRIVATE
+    FTC_SYSTEM_CONFIG="${FTC_SYSTEM_CONFIG}")
+endif()
 
 if (MSVC)
   target_compile_options(${LOCAL_LIB_NAME} PRIVATE /W4)

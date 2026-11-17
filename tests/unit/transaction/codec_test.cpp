@@ -16,6 +16,8 @@ using confide::transaction::decode_meta;
 using confide::transaction::encode_manifest;
 using confide::transaction::encode_meta;
 using confide::transaction::FileEntry;
+using confide::transaction::ForwardInfo;
+using confide::transaction::ForwardStatus;
 using confide::transaction::State;
 using confide::transaction::Transaction;
 
@@ -111,6 +113,49 @@ TEST(CodecMeta, MissingCommentIsEmpty) {
   ASSERT_TRUE(r) << r.error().detail;
   EXPECT_EQ(r->comment, "");
   expect_invalid_meta(meta_with("state", R"("open","comment":5)"));
+}
+
+TEST(CodecMeta, RoundTripWithForwarding) {
+  auto tx = make_tx();
+  tx.state = State::committed;
+  tx.committed_at = parse_iso8601("2026-09-28T10:05:00Z").value();
+  tx.forwarding = ForwardInfo{
+      .status = ForwardStatus::retrying,
+      .attempts = 3,
+      .last_attempt_at = parse_iso8601("2026-09-28T10:06:00Z").value(),
+      .next_attempt_at = parse_iso8601("2026-09-28T10:07:00Z").value(),
+      .error = "unavailable",
+  };
+  const auto decoded = decode_meta(encode_meta(tx));
+  ASSERT_TRUE(decoded) << decoded.error().detail;
+  EXPECT_EQ(*decoded, tx);
+
+  tx.forwarding = ForwardInfo{.status = ForwardStatus::failed, .attempts = 1};
+  const auto bare = decode_meta(encode_meta(tx));
+  ASSERT_TRUE(bare) << bare.error().detail;
+  EXPECT_EQ(*bare, tx);
+}
+
+TEST(CodecMeta, MissingForwardingIsUnset) {
+  // meta.json written before forwarding status existed, or with nothing to say.
+  const auto r = decode_meta(meta_with("", ""));
+  ASSERT_TRUE(r) << r.error().detail;
+  EXPECT_FALSE(r->forwarding);
+  EXPECT_EQ(encode_meta(make_tx()).find("forwarding"), std::string::npos);
+  const auto null = decode_meta(meta_with("state", R"("open","forwarding":null)"));
+  ASSERT_TRUE(null) << null.error().detail;
+  EXPECT_FALSE(null->forwarding);
+}
+
+TEST(CodecMeta, RejectsBadForwarding) {
+  expect_invalid_meta(meta_with("state", R"("committed","forwarding":5)"));
+  expect_invalid_meta(meta_with("state", R"("committed","forwarding":{"attempts":1})"));
+  expect_invalid_meta(
+      meta_with("state", R"("committed","forwarding":{"status":"lost","attempts":1})"));
+  expect_invalid_meta(
+      meta_with("state", R"("committed","forwarding":{"status":"failed","attempts":-1})"));
+  expect_invalid_meta(meta_with(
+      "state", R"("committed","forwarding":{"status":"failed","attempts":1,"next_attempt_at":"x"})"));
 }
 
 TEST(CodecMeta, OmitsUnsetOptionalTimes) {

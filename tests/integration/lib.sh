@@ -140,11 +140,12 @@ site_peak_rss_kib() {
   awk '/^VmHWM:/ { print $2 }' "/proc/${SITE_PID[$1]}/status"
 }
 
-# ftc_as USER SITE ARGS... : ftc against SITE, logged in as USER.
+# ftc_as USER SITE ARGS... : ftc against SITE, logged in as USER. No config
+# file (FTC_CONFIG=), so the machine's /etc/ftc/ftc.toml can't interfere.
 ftc_as() {
   local user=$1 site=$2
   shift 2
-  FTC_PASSWORD="pw-$user" XDG_STATE_HOME="$WORK/ftc-state" \
+  FTC_PASSWORD="pw-$user" XDG_STATE_HOME="$WORK/ftc-state" FTC_CONFIG= \
     "$BIN/ftc" -s "https://localhost:${SITE_PORT[$site]}" -u "$user" \
     --ca-file "$WORK/cert.pem" "$@"
 }

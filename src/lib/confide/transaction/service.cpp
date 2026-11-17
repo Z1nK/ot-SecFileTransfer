@@ -22,15 +22,32 @@ std::shared_ptr<std::mutex> TransactionService::lock_for(const common::Transacti
   return slot;
 }
 
-Result<void> TransactionService::destroy(const common::TransactionId& id, BizEventType type,
-                                         const Caller& actor) {
+Result<std::shared_ptr<std::mutex>>
+TransactionService::lock_existing(const common::TransactionId& id) {
+  if (!repo_.contains(id)) {
+    return not_found(id);
+  }
+  return lock_for(id);
+}
+
+std::size_t TransactionService::lock_count() const {
+  const std::scoped_lock lock(locks_mu_);
+  return locks_.size();
+}
+
+Result<void> TransactionService::destroy(
+    const common::TransactionId& id, BizEventType type, const Caller& actor,
+    const std::function<Result<void>(const Transaction&)>& allowed) {
   {
-    const auto mu = lock_for(id);
+    CFD_TRY(mu, lock_existing(id));
     const std::scoped_lock lock(*mu);
 
     auto tx = repo_.find(id);
     if (!tx) {
       return not_found(id);
+    }
+    if (allowed) {
+      CFD_TRYV(allowed(*tx));
     }
     // Already `expired` (an earlier delete failed): just try the delete again.
     if (tx->state != State::expired) {

@@ -9,6 +9,48 @@ Each release is split into two parts:
 - **Business logic**: what users and administrators see — features, rules, API and CLI behaviour, configuration options.
 - **Technical**: internals — code structure, build, packaging, CI, tests, tooling.
 
+## [Unreleased]
+
+### Business logic
+
+#### Added
+- **ftc config files.** ftc now reads `/etc/ftc/ftc.toml` (system) and `~/.config/ftc/ftc.toml` (user), both optional, with `server`, `user` and `ca_file`. Each setting comes from the command line first, then `FTC_SERVER` / `FTC_USER` / `FTC_CA_FILE`, then the user file, then the system file. `--config PATH` / `FTC_CONFIG` reads one given file instead. A broken file stops ftc with exit code 2. The password and `--allow-http` are never taken from a file. The `confide-client` package installs `/etc/ftc/ftc.toml` with everything commented out, kept on upgrade once edited.
+- **`ftc config`** shows the server, user and CA bundle in use and where each comes from; `ftc config --get KEY` prints one value, for scripts. The Nautilus dialogs use it, so they now also work with a server set only in a config file.
+- **GNOME Files (Nautilus): "Get with ftc…"** on the background of a folder (and "Get with ftc into folder…" on a selected folder) opens a dialog (`ftc-get-dialog`, zenity) that lists the downloadable transactions of the inbox (committed and delivered), logs in if needed and runs `ftc get` for the chosen ones into that folder. Existing files are overwritten only after asking. Installed with the `confide-client-nautilus` package as `bin/ftc-get-dialog`.
+- **Nautilus "Send with ftc…": a comment field.** The send dialog is now one form with the recipient and an optional comment, passed to `ftc send --comment` (at most 256 characters; the form asks again if it is longer or no recipient is given). With recent recipients, they are offered in a list next to a field to type a new one, which wins when filled in.
+- **Nautilus integration: `install.sh` / `uninstall.sh`** in `integrations/nautilus/` install and remove the menu items for the current user without the package (the nautilus-python extension, or Nautilus scripts when nautilus-python is missing) and warn about missing dependencies.
+- **A sender can delete their own open transaction**: `DELETE /transactions/{id}` and `ftc delete ID` remove it with its files and log `discarded`. Only the sender, and only while it is `open`; once committed it answers 409 and stays until retention or an admin removes it. `ftc send` names the command when it leaves a transaction open after a failed upload.
+- **`rest.max_upload_bytes`** sets the largest single file a client or peer may upload; a larger one is refused with 400 from its `Content-Length`, before any of it is read. Default `0` = no limit, as before.
+- **The sender sees how forwarding goes.** A committed transaction for another server now has `forwarding` in its JSON: `status` (`pending`, `retrying` while the peer can't be reached, `failed` once the peer refused it for good), the number of failed attempts, the last and next attempt time, and the last `error`. The error is `unknown_destination` (no such user on that server) or `forwarding_error` (anything else): the technical cause is in the server's logs only, not shown to the sender. `ftc outbox` shows that status instead of `committed`, with a line saying why for each one that did not get through; `ftc show ID` lists every field. It is kept across restarts and cleared on delivery; the transaction's `state` stays `committed` as before.
+- **`ftc retry ID` / `POST /transactions/{id}/retry`** ask for another attempt to forward a committed transaction: after `failed` once the cause is fixed, or to skip the wait while `retrying`. The attempt comes no sooner than 5 s after the last failed one, however often it is asked for. Only the sender; 409 for a local or already delivered transaction.
+- **Failed forwards are in the business log.** When the forwarder gives up on a push (unknown user on the peer, wrong peer token, ...), it logs `forward_failed` with the transaction, the target and the reason (`error`, `detail`). Until now the business log only showed such a transaction as `committed`.
+- **The receiving server logs refused pushes.** A bad peer token, and any request a peer makes on `/internal/*` that is refused with a 4xx, now give a warning in its technical log; before, they showed up only in the sending server's log.
+- **`rest.trusted_proxies`: running behind a reverse proxy.** Behind a proxy all requests came from the proxy's address, so 20 wrong passwords from any users blocked everybody for up to 15 min. Listed proxies (IPs or CIDR blocks) may now name the client in `X-Forwarded-For`; login throttling and the technical log use that address. The header is ignored from anyone else, and entries the client wrote itself are skipped. A listed proxy that sends no header counts as the client and is logged once. Default: empty, the header is never read.
+- **`origin_server` in transaction JSON.** Users now see which server a received transaction came from (it was admin-only), and `ftc inbox` shows the sender as `alice@siteA` for those: `alice` alone could not be told from the alice of one's own server.
+
+#### Changed
+- **The forwarder logs fewer lines while a peer is down.** A failed attempt is logged for the first one, when the error changes and every 10th attempt, instead of every time; a transaction delivered after failures says how many attempts it took.
+- **The Nautilus integration is a package of its own: `confide-client-nautilus`** (`.deb` arch `all`, `.rpm` `noarch`) with `ftc-send-dialog`, `ftc-get-dialog` and `ftc_nautilus.py`. `confide-client` now holds only `ftc`, so servers and headless VMs get no desktop files. The new package requires `confide-client` of the same version and `zenity`, and recommends nautilus-python and libnotify; install it next to `confide-client` on desktops. Upgrading from 0.7.6, where the files were in `confide-client`, moves them over.
+- **A peer's push is checked like local input.** The sender name must follow the rule for user names (1-64 chars of `[A-Za-z0-9._-]`), and an expiry beyond this server's `retention.max_days` is shortened to it.
+- **Old failed logins are forgotten.** A user, address or pair with no failed login for an hour starts again at zero.
+
+#### Fixed
+- **LDAP: a recipient typed in another case never got the transaction.** `--to Alice` was accepted (LDAP ignores case) but stored as typed, while alice's inbox matches the directory's spelling exactly. The target is now stored as the directory spells it, for local sends and for pushes from a peer.
+- **An LDAP outage could stall every request.** An inbox listing asked the directory about group membership once per transaction while holding the lock on all transactions, waiting `timeout_s` each time. It now asks once per target name, without the lock and off the network threads, and after an unanswered lookup the next ones fail at once for 10 s.
+- **One address could end up throttled for good.** The per-address count of failed logins only ever grew (a successful login does not clear it), so an address shared by many users reached the limit and every further typo blocked all of them.
+- **Requests for transaction ids that do not exist** each left a small lock object behind, so any user could make the server's memory grow.
+
+### Technical
+
+#### Changed
+- New `client/settings.hpp`: `Settings` layers with per-key origin, `parse_settings()`, `load_settings_file[_if_exists]()`, `overlay()`, `default_settings_files()`; the client library now links toml11. ftc's `Global` carries the origins and the files read. CMake cache variables `FTC_CONFIG_DIR` (`/etc/ftc`) and `FTC_SYSTEM_CONFIG`. Packaging: `confide-client` ships `/etc/ftc/ftc.toml` (deb conffile, rpm `%config(noreplace)`, 0644); the release workflow checks it. The integration tests run ftc with `FTC_CONFIG=` so a machine's `/etc/ftc` can't interfere, and `two_sites.sh` tests the config file and its precedence.
+- `transaction::ForwardInfo` / `ForwardStatus` on `Transaction::forwarding`, stored in meta.json as `forwarding` (absent in older files). `TransactionService::record_forward_failure()` and `retry_forward()`, `ServiceOptions::on_retry` and `retry_min_interval`.
+- `Forwarder::enqueue()` cuts the wait of a transaction already queued for a retry and ignores the one being pushed, so a retry never pushes a transaction twice.
+- Packaging: new CPack component `nautilus` → `confide-client-nautilus` (Linux only). The release workflow collects the `noarch` RPM too, installs the other packages first and checks that no integration files or zenity come with them, then installs `confide-client-nautilus` on top.
+- `transaction::DestinationCheck` returns the target name to store; `auth::IUserDirectory` has `canonical_user()`; `is_valid_name` moved to `common/name.hpp` so `transaction` can use it without `config`.
+- `TransactionService::lock_existing()` replaces `lock_for()` wherever the id comes from a request.
+- New `common/ip_network.hpp`: `canonical_ip()`, `IpNetworks` (IP/CIDR set) and `client_address()`. `ServerOptions::trusted_proxies`, parsed by `HttpServer::start()`. The client address is now always in canonical form, so an IPv4-mapped peer (`::ffff:192.0.2.1` on a dual-stack bind) is logged and throttled as `192.0.2.1`.
+
 ## [0.7.6] — 2026-11-10
 
 ### Business logic

@@ -1,10 +1,11 @@
 // ftc send: create a transaction, upload, commit, all in one go.
 // ftc recent: the recipients `send` was last used with.
 #include "commands.hpp"
+#include "session.hpp"
+
 #include <client/local_files.hpp>
 #include <client/outgoing.hpp>
 #include <client/recent_recipients.hpp>
-#include "session.hpp"
 
 #include <iostream>
 #include <vector>
@@ -22,7 +23,8 @@ void send_options(po::options_description& desc, po::options_description& hidden
 
 Result<RecentRecipients> recent_for(const Global& global) {
   if (global.server.empty()) {
-    return fail(ErrCode::validation, "no server: use --server or FTC_SERVER");
+    return fail(ErrCode::validation,
+                "no server: use --server, FTC_SERVER or server in ftc.toml (see ftc config)");
   }
   CFD_TRY(url, net::ServerUrl::parse(global.server));
   return RecentRecipients::for_server(url, global.user);
@@ -33,8 +35,8 @@ void remember(const Global& global, const std::string& to) {
   auto recent = recent_for(global);
   auto res = recent ? recent->push(to) : Result<void>{std::unexpected(recent.error())};
   if (!res) {
-    std::cerr << "ftc: warning: recipient not added to the recent list ("
-              << describe(res.error()) << ")\n";
+    std::cerr << "ftc: warning: recipient not added to the recent list (" << describe(res.error())
+              << ")\n";
   }
 }
 
@@ -53,7 +55,8 @@ Result<void> run_send(const Global& global, const po::variables_map& vm) {
     return {};
   };
   if (auto res = upload_all(); !res) {
-    std::cerr << "transaction " << id.str() << " left open, not committed\n";
+    std::cerr << "transaction " << id.str()
+              << " left open, not committed (remove it with: ftc delete " << id.str() << ")\n";
     return res;
   }
   std::cout << "committed " << id.str() << " (" << files.size() << " files)\n";

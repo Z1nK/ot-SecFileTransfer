@@ -1,17 +1,22 @@
 #include <gtest/gtest.h>
 #include <transaction/service.hpp>
 
+#include <cctype>
+#include <chrono>
 #include <filesystem>
+#include <future>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 using confide::common::ErrCode;
 using confide::common::RelativePath;
 using confide::transaction::Box;
 using confide::transaction::Caller;
 using confide::transaction::CreateRequest;
+using confide::transaction::ForwardStatus;
 using confide::transaction::MembershipCheck;
 using confide::transaction::ServiceOptions;
 using confide::transaction::Transaction;
@@ -26,10 +31,13 @@ struct NullSink final : confide::logging::ILogSink {
   void write(confide::logging::LogLevel, std::string_view) override {}
 };
 
+// Stands still unless a test moves it.
 struct FixedClock final : confide::common::IClock {
   confide::common::Timestamp now() const override {
-    return confide::common::Timestamp{std::chrono::seconds{1'800'000'000}};
+    return confide::common::Timestamp{std::chrono::seconds{1'800'000'000}} + offset;
   }
+  void advance(std::chrono::seconds by) { offset += by; }
+  std::chrono::seconds offset{0};
 };
 
 // devs = {alice, bob}; carol sends, dave is an outsider.
@@ -48,7 +56,7 @@ protected:
     fs::remove_all(dir_);
   }
 
-  void start(MembershipCheck is_recipient) {
+  void start(MembershipCheck is_recipient, confide::transaction::DestinationCheck check = {}) {
     fs::remove_all(dir_);
     auto store = confide::storage::FileStore::open(dir_);
     ASSERT_TRUE(store.has_value()) << store.error().detail;
@@ -59,9 +67,12 @@ protected:
                                              ServiceOptions{.local_server = "siteA",
                                                             .default_retention_days = 1,
                                                             .max_retention_days = 7,
-                                                            .check_destination = {},
+                                                            .check_destination = std::move(check),
                                                             .is_recipient = std::move(is_recipient),
-                                                            .on_committed = {}});
+                                                            .on_committed = {},
+                                                            .on_retry = [this](const Transaction& tx) {
+                                                              retried_.push_back(tx.id);
+                                                            }});
   }
 
   // carol -> devs with one file, open.
@@ -84,6 +95,16 @@ protected:
   std::optional<TransactionRepository> repo_;
   std::unique_ptr<TransactionService> service_;
   RelativePath path_ = RelativePath::parse("a.txt").value();
+
+  // carol -> bob@siteB with one file, committed: waiting to be forwarded.
+  Transaction create_outgoing() {
+    auto tx = service_->create(carol_, CreateRequest{.target_user = "bob", .target_server = "siteB"});
+    EXPECT_TRUE(tx.has_value());
+    EXPECT_TRUE(service_->commit(carol_, tx->id).has_value());
+    return *tx;
+  }
+
+  std::vector<confide::common::TransactionId> retried_;  // on_retry calls
 
   Caller carol_{.name = "carol"};
   Caller alice_{.name = "alice"};
@@ -109,6 +130,283 @@ TEST_F(GroupTargetTest, MembersReadOnceCommitted) {
     EXPECT_TRUE(service_->get(member, tx.id).has_value()) << member.name;
     EXPECT_TRUE(service_->open_download(member, tx.id, path_).has_value()) << member.name;
   }
+}
+
+// The membership check can be a slow LDAP call. It must run once per target
+// name and without the repository lock, or one inbox listing stalls every
+// other request for as long as the directory takes to answer.
+TEST_F(GroupTargetTest, InboxAsksAboutMembershipOutsideTheRepositoryLock) {
+  int calls = 0;
+  bool repo_was_locked = false;
+  std::optional<confide::common::TransactionId> known;
+  // Kept until the end of the test: a future from std::async joins its
+  // thread when destroyed, which inside the callback would wait for the very
+  // lock being tested and hang instead of failing.
+  std::vector<std::future<bool>> probes;
+  start([&](std::string_view user, std::string_view target) {
+    ++calls;
+    // Another thread must be able to read the repository meanwhile.
+    auto& probe = probes.emplace_back(
+        std::async(std::launch::async, [&] { return repo_->find(*known).has_value(); }));
+    if (probe.wait_for(std::chrono::seconds{2}) != std::future_status::ready) {
+      repo_was_locked = true;
+    }
+    return in_devs(user, target);
+  });
+
+  for (int i = 0; i < 3; ++i) {
+    const auto tx = create_open();
+    known = tx.id;
+    ASSERT_TRUE(service_->commit(carol_, tx.id).has_value());
+  }
+
+  calls = 0;
+  EXPECT_EQ(service_->list(alice_, Box::in).size(), 3U);
+  EXPECT_EQ(calls, 1);  // three transactions, one target name
+  EXPECT_FALSE(repo_was_locked);
+
+  calls = 0;
+  EXPECT_TRUE(service_->list(dave_, Box::in).empty());
+  EXPECT_EQ(calls, 1);
+  EXPECT_FALSE(repo_was_locked);
+}
+
+// Each transaction has a mutex, kept in a map. Asking about ids that do not
+// exist must not add to it, or any user could grow it without end.
+TEST_F(GroupTargetTest, UnknownIdsLeaveNoLockBehind) {
+  const auto tx = create_open();
+  const auto before = service_->lock_count();
+  EXPECT_EQ(before, 1U);
+
+  const Caller admin{.name = "root", .is_admin = true};
+  for (int i = 0; i < 50; ++i) {
+    const auto ghost = confide::common::TransactionId::generate();
+    EXPECT_EQ(service_->commit(carol_, ghost).error().code, ErrCode::notfound);
+    EXPECT_EQ(service_->begin_upload(carol_, ghost, path_).error().code, ErrCode::notfound);
+    EXPECT_EQ(service_->remove_file(carol_, ghost, path_).error().code, ErrCode::notfound);
+    EXPECT_EQ(service_->set_retention(admin, ghost, 1).error().code, ErrCode::notfound);
+    EXPECT_EQ(service_->admin_delete(admin, ghost).error().code, ErrCode::notfound);
+    EXPECT_EQ(service_->mark_delivered(ghost).error().code, ErrCode::notfound);
+  }
+  EXPECT_EQ(service_->lock_count(), before);
+
+  // The real one still works, and its mutex goes when it is deleted.
+  ASSERT_TRUE(service_->commit(carol_, tx.id).has_value());
+  ASSERT_TRUE(service_->admin_delete(admin, tx.id).has_value());
+  EXPECT_EQ(service_->lock_count(), 0U);
+}
+
+namespace {
+
+// A directory that ignores case, as LDAP does: "Alice" is the user "alice".
+confide::common::Result<std::string> loose_directory(std::string_view user, std::string_view) {
+  std::string lower{user};
+  for (char& c : lower) {
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  }
+  if (lower != "alice") {
+    return std::unexpected(
+        confide::common::Error::make(ErrCode::unknown_destination, "no such user"));
+  }
+  return lower;
+}
+
+}  // namespace
+
+// The target is stored as the directory spells it, not as the sender typed
+// it: alice logs in as "alice" and must find what was sent to "Alice".
+TEST_F(GroupTargetTest, TargetIsStoredAsTheDirectorySpellsIt) {
+  start(in_devs, loose_directory);
+  auto tx = service_->create(carol_, CreateRequest{.target_user = "Alice", .target_server = {}});
+  ASSERT_TRUE(tx.has_value());
+  EXPECT_EQ(tx->target_user, "alice");
+  ASSERT_TRUE(service_->commit(carol_, tx->id).has_value());
+
+  const auto inbox = service_->list(alice_, Box::in);
+  ASSERT_EQ(inbox.size(), 1U);
+  EXPECT_EQ(inbox[0].id, tx->id);
+  EXPECT_TRUE(service_->get(alice_, tx->id).has_value());
+}
+
+// What a peer pushes is checked like our own input.
+TEST_F(GroupTargetTest, PeerPushIsValidated) {
+  start(in_devs, loose_directory);
+  const Caller peer{.name = "siteB", .is_peer = true};
+  const auto now = clock_.now();
+  const auto push = [&](std::string sender, std::string target, std::chrono::days keep) {
+    return service_->receive(
+        peer, confide::transaction::ReceiveRequest{.id = confide::common::TransactionId::generate(),
+                                                   .sender = std::move(sender),
+                                                   .target_user = std::move(target),
+                                                   .created_at = now,
+                                                   .expires_at = now + keep});
+  };
+
+  // Sender names follow the rule for user names: nothing that could break a
+  // one-line listing or a terminal.
+  for (const char* bad : {"eve mallory", "eve\x1b[2J", "eve@siteC", "a/b", ""}) {
+    auto r = push(bad, "alice", std::chrono::days{1});
+    ASSERT_FALSE(r.has_value()) << bad;
+    EXPECT_EQ(r.error().code, ErrCode::validation) << bad;
+  }
+
+  // The target gets the local spelling here as well.
+  auto ok = push("eve", "ALICE", std::chrono::days{1});
+  ASSERT_TRUE(ok.has_value()) << ok.error().detail;
+  EXPECT_EQ(ok->target_user, "alice");
+  EXPECT_EQ(ok->expires_at, now + std::chrono::days{1});
+
+  // max_retention_days is 7 in this fixture: a longer stay is cut to it.
+  auto forever = push("eve", "alice", std::chrono::days{3650});
+  ASSERT_TRUE(forever.has_value()) << forever.error().detail;
+  EXPECT_EQ(forever->expires_at, now + std::chrono::days{7});
+}
+
+// The sender may delete what they created while it is open, and nothing else.
+TEST_F(GroupTargetTest, SenderDiscardsOnlyTheirOwnOpenTransaction) {
+  const auto tx = create_open();
+  const Caller peer{.name = "siteB", .is_peer = true};
+  const Caller admin{.name = "root", .is_admin = true};
+
+  // Not the group members, an outsider, a peer or an admin (who has
+  // admin_delete() for that).
+  for (const auto& other : {alice_, dave_, peer, admin}) {
+    EXPECT_EQ(service_->discard(other, tx.id).error().code, ErrCode::forbidden) << other.name;
+  }
+  EXPECT_TRUE(store_->has_transaction(tx.id));
+
+  ASSERT_TRUE(service_->discard(carol_, tx.id).has_value());
+  EXPECT_FALSE(store_->has_transaction(tx.id));
+  EXPECT_EQ(service_->get(carol_, tx.id).error().code, ErrCode::notfound);
+  EXPECT_TRUE(service_->list(carol_, Box::out).empty());
+  EXPECT_EQ(service_->discard(carol_, tx.id).error().code, ErrCode::notfound);
+  EXPECT_EQ(service_->lock_count(), 0U);
+}
+
+TEST_F(GroupTargetTest, CommittedTransactionCannotBeDiscarded) {
+  const auto tx = create_open();
+  ASSERT_TRUE(service_->commit(carol_, tx.id).has_value());
+
+  EXPECT_EQ(service_->discard(carol_, tx.id).error().code, ErrCode::conflict);
+  // Untouched: the members still read it.
+  EXPECT_EQ(service_->get(carol_, tx.id).value().state, confide::transaction::State::committed);
+  EXPECT_TRUE(service_->open_download(alice_, tx.id, path_).has_value());
+}
+
+// An upload that was running when the transaction was deleted ends with an
+// error and leaves no file behind.
+TEST_F(GroupTargetTest, DiscardEndsAnUploadInProgress) {
+  const auto tx = create_open();
+  auto up = service_->begin_upload(carol_, tx.id, RelativePath::parse("late.bin").value());
+  ASSERT_TRUE(up.has_value());
+  ASSERT_TRUE(up->write(std::string_view("bytes")).has_value());
+
+  ASSERT_TRUE(service_->discard(carol_, tx.id).has_value());
+  EXPECT_EQ(up->finish().error().code, ErrCode::notfound);
+  EXPECT_FALSE(store_->has_transaction(tx.id));
+}
+
+// The forwarder's failures end up on the transaction, where the sender sees
+// them; a delivery clears them.
+TEST_F(GroupTargetTest, ForwardFailuresAreRecordedForTheSender) {
+  using namespace std::chrono_literals;
+  const auto tx = create_outgoing();
+  const auto now = clock_.now();
+  EXPECT_FALSE(service_->get(carol_, tx.id).value().forwarding);
+
+  const auto down = confide::common::Error::make(ErrCode::unavailable, "connection refused");
+  ASSERT_TRUE(service_->record_forward_failure(tx.id, down, 30s).has_value());
+  auto fwd = service_->get(carol_, tx.id).value().forwarding;
+  ASSERT_TRUE(fwd);
+  EXPECT_EQ(fwd->status, ForwardStatus::retrying);
+  EXPECT_EQ(fwd->attempts, 1U);
+  EXPECT_EQ(fwd->last_attempt_at, now);
+  EXPECT_EQ(fwd->next_attempt_at, now + 30s);
+  EXPECT_EQ(fwd->error, "unavailable");
+  // What the network or the peer said is not kept where the sender reads.
+  EXPECT_EQ(store_->read_document(tx.id, confide::storage::Document::meta).value_or("").find("connection refused"), std::string::npos);
+
+  const auto refused = confide::common::Error::make(ErrCode::unknown_destination, "no such user");
+  ASSERT_TRUE(service_->record_forward_failure(tx.id, refused, std::nullopt).has_value());
+  fwd = service_->get(carol_, tx.id).value().forwarding;
+  ASSERT_TRUE(fwd);
+  EXPECT_EQ(fwd->status, ForwardStatus::failed);
+  EXPECT_EQ(fwd->attempts, 2U);
+  EXPECT_FALSE(fwd->next_attempt_at);
+  EXPECT_EQ(fwd->error, "unknown_destination");
+  // Still committed: a failed forward is not a state of the transaction.
+  EXPECT_EQ(service_->get(carol_, tx.id).value().state, confide::transaction::State::committed);
+
+  ASSERT_TRUE(service_->mark_delivered(tx.id).has_value());
+  const auto delivered = service_->get(carol_, tx.id).value();
+  EXPECT_EQ(delivered.state, confide::transaction::State::delivered);
+  EXPECT_FALSE(delivered.forwarding);
+
+  // A late failure report for a delivered transaction changes nothing.
+  ASSERT_TRUE(service_->record_forward_failure(tx.id, down, 30s).has_value());
+  EXPECT_FALSE(service_->get(carol_, tx.id).value().forwarding);
+  // Nor does one for a transaction that is gone.
+  EXPECT_TRUE(service_
+                  ->record_forward_failure(confide::common::TransactionId::generate(), down, 30s)
+                  .has_value());
+}
+
+TEST_F(GroupTargetTest, SenderRetriesForwarding) {
+  using namespace std::chrono_literals;
+  const auto tx = create_outgoing();
+  const auto refused = confide::common::Error::make(ErrCode::unknown_destination, "no such user");
+  ASSERT_TRUE(service_->record_forward_failure(tx.id, refused, std::nullopt).has_value());
+
+  const Caller peer{.name = "siteB", .is_peer = true};
+  for (const auto& other : {alice_, bob_, dave_, peer}) {
+    EXPECT_EQ(service_->retry_forward(other, tx.id).error().code, ErrCode::forbidden) << other.name;
+  }
+  EXPECT_TRUE(retried_.empty());
+
+  const auto again = service_->retry_forward(carol_, tx.id);
+  ASSERT_TRUE(again.has_value()) << again.error().detail;
+  EXPECT_EQ(retried_, std::vector{tx.id});
+  const auto fwd = service_->get(carol_, tx.id).value().forwarding;
+  ASSERT_TRUE(fwd);
+  EXPECT_EQ(fwd->status, ForwardStatus::pending);
+  EXPECT_EQ(fwd->attempts, 1U);              // kept
+  EXPECT_EQ(fwd->error, "unknown_destination");  // why the last one failed
+  // Not at once: a minimum interval after the attempt that just failed.
+  EXPECT_EQ(fwd->next_attempt_at, clock_.now() + 5s);
+
+  // Asking again while it is pending moves nothing.
+  clock_.advance(2s);
+  ASSERT_TRUE(service_->retry_forward(carol_, tx.id).has_value());
+  EXPECT_EQ(service_->get(carol_, tx.id).value().forwarding->next_attempt_at, fwd->next_attempt_at);
+  EXPECT_EQ(retried_.size(), 2U);
+
+  // Long after a failed attempt, a retry goes now.
+  ASSERT_TRUE(service_->record_forward_failure(tx.id, refused, std::nullopt).has_value());
+  clock_.advance(60s);
+  ASSERT_TRUE(service_->retry_forward(carol_, tx.id).has_value());
+  EXPECT_EQ(service_->get(carol_, tx.id).value().forwarding->next_attempt_at, clock_.now());
+
+  // While retrying, it is never put off beyond the attempt already planned.
+  const auto down = confide::common::Error::make(ErrCode::unavailable, "connection refused");
+  ASSERT_TRUE(service_->record_forward_failure(tx.id, down, 2s).has_value());
+  ASSERT_TRUE(service_->retry_forward(carol_, tx.id).has_value());
+  EXPECT_EQ(service_->get(carol_, tx.id).value().forwarding->next_attempt_at, clock_.now() + 2s);
+
+  ASSERT_TRUE(service_->mark_delivered(tx.id).has_value());
+  EXPECT_EQ(service_->retry_forward(carol_, tx.id).error().code, ErrCode::conflict);
+  EXPECT_EQ(service_->retry_forward(carol_, confide::common::TransactionId::generate())
+                .error()
+                .code,
+            ErrCode::notfound);
+}
+
+TEST_F(GroupTargetTest, OnlyOutgoingTransactionsCanBeRetried) {
+  const auto open = create_open();
+  EXPECT_EQ(service_->retry_forward(carol_, open.id).error().code, ErrCode::conflict);
+  ASSERT_TRUE(service_->commit(carol_, open.id).has_value());
+  // Committed, but for a local group: nothing to forward.
+  EXPECT_EQ(service_->retry_forward(carol_, open.id).error().code, ErrCode::conflict);
+  EXPECT_TRUE(retried_.empty());
 }
 
 TEST_F(GroupTargetTest, OutsidersAreForbidden) {

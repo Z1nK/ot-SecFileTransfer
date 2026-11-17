@@ -72,16 +72,18 @@ std::string describe(const Error& err) {
 // send would reach every admin.
 transaction::DestinationCheck destination_check(const config::Config& cfg,
                                                 const auth::IUserDirectory& directory) {
-  return [&cfg, &directory](std::string_view user, std::string_view server) -> Result<void> {
+  return [&cfg, &directory](std::string_view user,
+                            std::string_view server) -> Result<std::string> {
     if (server.empty() || server == cfg.instance_name()) {
       if (!cfg.auth().admin_group.empty() && user == cfg.auth().admin_group) {
         return std::unexpected(
             Error::make(ErrCode::unknown_destination,
                         std::format("'{}' is the admin group, not a recipient", user)));
       }
-      CFD_TRY(is_user, directory.has_user(user));
-      if (is_user) {
-        return {};
+      // As the directory spells it: LDAP ignores case, the inbox does not.
+      CFD_TRY(canonical, directory.canonical_user(user));
+      if (canonical) {
+        return std::move(*canonical);
       }
       CFD_TRY(is_group, directory.has_group(user));
       if (!is_group) {
@@ -89,13 +91,13 @@ transaction::DestinationCheck destination_check(const config::Config& cfg,
             Error::make(ErrCode::unknown_destination,
                         std::format("no user or group '{}' on this server", user)));
       }
-      return {};
+      return std::string{user};  // group: membership is asked by this name
     }
     if (cfg.find_peer(server) == nullptr) {
       return std::unexpected(
           Error::make(ErrCode::unknown_destination, std::format("unknown server '{}'", server)));
     }
-    return {};
+    return std::string{user};  // the peer checks, and spells, its own users
   };
 }
 
@@ -221,6 +223,22 @@ Result<void> serve(const config::Config& cfg, const common::IClock& clock, loggi
   // so no commit can see it unset.
   forwarder::Forwarder* forward = nullptr;
 
+  // Received transactions have no target_server, so only our own remote
+  // ones are pushed: at once after a commit, and at forwarding.next_attempt_at
+  // after a retry_forward(), which keeps a minimum interval between attempts.
+  const auto to_forwarder = [&forward, &clock](const transaction::Transaction& tx) {
+    if (forward == nullptr || tx.target_server.empty()) {
+      return;
+    }
+    std::chrono::milliseconds delay{0};
+    if (tx.forwarding && tx.forwarding->next_attempt_at) {
+      delay = std::chrono::duration_cast<std::chrono::milliseconds>(
+          *tx.forwarding->next_attempt_at - clock.now());
+    }
+    forward->enqueue(tx.id, delay);
+  };
+  auto forward_options = forwarder_options(cfg);
+
   transaction::TransactionService service(
       repo, store, blog, clock,
       transaction::ServiceOptions{
@@ -231,17 +249,14 @@ Result<void> serve(const config::Config& cfg, const common::IClock& clock, loggi
           .is_recipient = [&dir = *directory](std::string_view user, std::string_view target) {
             return dir.is_member(user, target);
           },
-          // Received transactions have no target_server, so only our own
-          // remote ones are pushed.
-          .on_committed =
-              [&forward](const transaction::Transaction& tx) {
-                if (forward != nullptr && !tx.target_server.empty()) {
-                  forward->enqueue(tx.id);
-                }
-              },
+          .on_committed = to_forwarder,
+          // retry_forward() only accepts transactions waiting to be forwarded.
+          .on_retry = to_forwarder,
+          .retry_min_interval =
+              std::chrono::ceil<std::chrono::seconds>(forward_options.first_retry),
       });
 
-  forwarder::Forwarder forwarding(service, store, tlog, forwarder_options(cfg));
+  forwarder::Forwarder forwarding(service, store, tlog, std::move(forward_options));
   forward = &forwarding;
 
   api::TransactionHandlers handlers(service, blog, tlog);

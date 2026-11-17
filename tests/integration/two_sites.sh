@@ -7,11 +7,15 @@
 #      it turns `delivered` on siteA and bob gets the same bytes on siteB.
 #   3. A committed transaction rejects new files.
 #   4. Unknown destinations are refused up front.
-#   5. With siteB down, a transaction waits `committed` and is delivered
-#      once siteB is back.
+#   5. With siteB down, a transaction waits `committed`, its sender sees
+#      `retrying` and why, and `ftc retry` delivers it once siteB is back.
+#   5b. A push siteB refuses (unknown user) shows `failed` to the sender, is
+#      in both servers' logs, and is tried again on `ftc retry`.
 #   6. Step by step: create, add, rm, commit.
 #   7. Admin: root (group "admins" on siteA) lists, changes retention, reads
 #      the business log, ends sessions and deletes; others are refused.
+#   8. ftc settings from a config file, overridden by FTC_SERVER and -s;
+#      a broken file stops ftc.
 #
 #   two_sites.sh <bin folder> [work folder]
 #
@@ -60,6 +64,7 @@ log "1. alice -> carol@siteA"
 id=$(ftc_as alice siteA send --to carol --comment "local" "$src" | sent_id)
 [[ -n $id ]] || die "no transaction id from ftc send"
 [[ $(show_field alice siteA "$id" state) == committed ]] || die "local transaction not committed"
+local_id=$id
 ftc_as carol siteA inbox | grep -q "$id" || die "carol's inbox misses $id"
 ftc_as carol siteA get "$id" "$WORK/carol" >/dev/null
 diff -r "$WORK/src/report" "$WORK/carol/report" || die "carol's copy differs"
@@ -105,13 +110,50 @@ recent=$(ftc_as alice siteA recent | paste -sd ' ')
 log "5. siteB down: transaction waits, then is delivered"
 site_stop siteB
 id=$(ftc_as alice siteA send --to bob@siteB "$src/a.txt" | sent_id)
-sleep 1
+is_retrying() { [[ $(show_field alice siteA "$1" forwarding.status) == retrying ]]; }
+wait_for 10 is_retrying "$id" || die "$id should show 'retrying' while siteB is down"
 [[ $(show_field alice siteA "$id" state) == committed ]] || die "$id should wait while siteB is down"
+# The sender is told that forwarding failed, not what is wrong between the servers.
+[[ $(show_field alice siteA "$id" forwarding.error) == forwarding_error ]] || die "$id: wrong error"
+[[ -z $(show_field alice siteA "$id" forwarding.detail) ]] || die "$id: error detail shown to the sender"
+ftc_as alice siteA outbox >"$WORK/outbox.txt"
+grep -q "^$id  retrying " "$WORK/outbox.txt" || die "outbox does not show $id as retrying"
+grep -q "^$id: forwarding error" "$WORK/outbox.txt" || die "outbox does not say why"
+if grep -Eqi "connect|refused|127\.0\.0\.1|unavailable" "$WORK/outbox.txt"; then
+  die "outbox shows the technical error to the sender"
+fi
+grep -q "\[unavailable\]" "$WORK/siteA/logs/technical.log" || die "technical error not in siteA's log"
 site_start siteB
-# First retries come after 5 s and 10 s.
+# Without the retry, the next attempt comes 5 s after the first.
+ftc_as alice siteA retry "$id" | grep -q "^retrying $id" || die "ftc retry failed"
 wait_for 40 is_delivered "$id" || die "$id not delivered after siteB came back"
+[[ -z $(show_field alice siteA "$id" forwarding.status) ]] || die "$id delivered but still shows a status"
 ftc_as bob siteB get "$id" "$WORK/bob2" >/dev/null
 diff "$src/a.txt" "$WORK/bob2/a.txt" || die "late copy differs"
+
+# --- 5b. Refused by the peer, then retried ---------------------------------
+log "5b. unknown user on siteB: failed, shown to the sender, retried"
+id=$(ftc_as alice siteA send --to nobody@siteB "$src/a.txt" | sent_id)
+is_failed() { [[ $(show_field alice siteA "$1" forwarding.status) == failed ]]; }
+wait_for 10 is_failed "$id" || die "$id should show 'failed'"
+[[ $(show_field alice siteA "$id" forwarding.error) == unknown_destination ]] || die "$id: wrong error"
+ftc_as alice siteA outbox >"$WORK/outbox.txt"
+grep -q "^$id  failed " "$WORK/outbox.txt" || die "outbox does not show $id as failed"
+grep -q "^$id: not delivered: no such user on that server; once fixed: ftc retry $id" "$WORK/outbox.txt" \
+  || die "outbox does not say why $id failed"
+grep -q "\"event\":\"forward_failed\",\"tx\":\"$id\"" "$WORK/siteA/logs/business.log" \
+  || die "no forward_failed for $id in siteA's business log"
+grep -q "from peer siteA: unknown_destination" "$WORK/siteB/logs/technical.log" \
+  || die "siteB did not log the refused push"
+ftc_as alice siteA retry "$id" >/dev/null || die "ftc retry $id failed"
+two_attempts() { [[ $(show_field alice siteA "$1" forwarding.attempts) == 2 ]] && is_failed "$1"; }
+# Not at once: the server waits 5 s after the failed attempt.
+wait_for 20 two_attempts "$id" || die "$id was not tried again"
+# Only what waits to be forwarded can be retried.
+if ftc_as alice siteA retry "$local_id" 2>"$WORK/err.txt"; then
+  die "retry of a local transaction succeeded"
+fi
+grep -q conflict "$WORK/err.txt" || die "unexpected error: $(cat "$WORK/err.txt")"
 
 # --- 6. Step by step: create, add, rm, commit ------------------------------
 log "6. alice -> carol@siteA step by step"
@@ -130,6 +172,22 @@ if ftc_as alice siteA rm "$id" a.txt 2>"$WORK/err.txt"; then
 fi
 grep -q notfound "$WORK/err.txt" || die "unexpected error: $(cat "$WORK/err.txt")"
 ftc_as alice siteA commit "$id" | grep -q "^committed $id" || die "commit of $id failed"
+# Committed: the sender can no longer delete it.
+if ftc_as alice siteA delete "$id" 2>"$WORK/err.txt"; then
+  die "delete of committed $id succeeded"
+fi
+grep -q conflict "$WORK/err.txt" || die "unexpected error: $(cat "$WORK/err.txt")"
+
+# An open one: only its sender deletes it, and then it is gone.
+open_id=$(ftc_as alice siteA create --to carol | sent_id)
+ftc_as alice siteA add "$open_id" "$src/a.txt" >/dev/null
+if ftc_as carol siteA delete "$open_id" 2>"$WORK/err.txt"; then
+  die "carol deleted alice's open $open_id"
+fi
+grep -q notfound "$WORK/err.txt" || die "unexpected error: $(cat "$WORK/err.txt")"
+ftc_as alice siteA delete "$open_id" | grep -q "^deleted $open_id" || die "delete of $open_id failed"
+ftc_as alice siteA outbox | grep -q "$open_id" && die "deleted $open_id still in alice's outbox"
+[[ ! -e $WORK/siteA/data/transactions/$open_id ]] || die "files of $open_id still on disk"
 [[ $(show_field alice siteA "$id" state) == committed ]] || die "$id not committed"
 if ftc_as alice siteA add "$id" "$src/a.txt" 2>"$WORK/err.txt"; then
   die "add into a committed transaction succeeded"
@@ -184,6 +242,28 @@ code=$(curl -s -o /dev/null -w '%{http_code}' --cacert "$WORK/cert.pem" \
   -u bob:pw-bob "https://localhost:${SITE_PORT[siteB]}/admin/status")
 [[ $code == 404 ]] || die "/admin on siteB gave HTTP $code, want 404"
 ftc_as root siteA admin logout | grep -q "admin session ended" || die "admin logout failed"
+
+# --- 8. Config file ----------------------------------------------------------
+# Server, user and CA from the file alone (ca_file relative to it); then a
+# wrong server in the file, which FTC_SERVER and -s override, in that order.
+cfg=$WORK/ftc.toml
+good=https://localhost:${SITE_PORT[siteA]}
+bad=https://localhost:1
+printf 'server = "%s"\nuser = "alice"\nca_file = "cert.pem"\n' "$good" >"$cfg"
+unset FTC_SERVER FTC_USER FTC_CA_FILE
+ftc_cfg() { FTC_PASSWORD=pw-alice XDG_STATE_HOME="$WORK/ftc-state" FTC_CONFIG="$cfg" "$BIN/ftc" "$@"; }
+ftc_cfg outbox >/dev/null || die "ftc with only a config file failed"
+[[ $(ftc_cfg config --get ca_file) == "$WORK/cert.pem" ]] \
+  || die "ca_file not resolved against the config file"
+printf 'server = "%s"\nuser = "alice"\nca_file = "cert.pem"\n' "$bad" >"$cfg"
+ftc_cfg outbox >/dev/null 2>&1 && die "ftc did not use the server from the config file"
+FTC_SERVER=$good ftc_cfg outbox >/dev/null || die "FTC_SERVER did not override the config file"
+FTC_SERVER=$bad ftc_cfg -s "$good" outbox >/dev/null || die "-s did not override FTC_SERVER"
+echo "server =" >"$cfg"
+rc=0
+ftc_cfg -s "$good" outbox >/dev/null 2>"$WORK/err.txt" || rc=$?
+[[ $rc == 2 ]] || die "a broken config file gave exit code $rc, want 2"
+grep -q "ftc.toml" "$WORK/err.txt" || die "the error does not name the config file: $(cat "$WORK/err.txt")"
 
 ok=true
 log "PASS"

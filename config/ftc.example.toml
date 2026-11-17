@@ -1,0 +1,20 @@
+# ftc (confide client) configuration.
+#
+# Every setting is optional. ftc takes each one from the first place that
+# has it:
+#   1. the command line          ftc -s URL -u NAME --ca-file PATH ...
+#   2. the environment           FTC_SERVER, FTC_USER, FTC_CA_FILE
+#   3. the user's file           ~/.config/ftc/ftc.toml  ($XDG_CONFIG_HOME/ftc/ftc.toml)
+#   4. the system file           /etc/ftc/ftc.toml (installed by confide-client)
+# An empty value ("") at a higher level brings back the default.
+# `ftc --config PATH` (or FTC_CONFIG=PATH) reads only that file instead of
+# 3 and 4; FTC_CONFIG="" reads none. `ftc config` shows what is in use and
+# where each value comes from.
+#
+# The password is never read from here, and plain http:// needs
+# --allow-http on the command line each time.
+
+# server = "https://ftc.example.org:8443"   # your confide server
+# user = "alice"                            # default: your OS login name
+# ca_file = "/etc/ftc/ca.pem"               # PEM CA bundle for https; relative paths are
+                                            # against this file's folder; default: system CAs

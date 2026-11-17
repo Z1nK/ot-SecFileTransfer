@@ -9,6 +9,7 @@ target_sources(${LOCAL_EXE_NAME} PRIVATE
   commands/admin.cpp
   commands/auth.cpp
   commands/compose.cpp
+  commands/config.cpp
   commands/get.cpp
   commands/query.cpp
   commands/send.cpp

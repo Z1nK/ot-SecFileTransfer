@@ -55,10 +55,22 @@ Result<void> TransactionHandlers::register_routes(Router& router) {
           .fn = &TransactionHandlers::get,
       },
       Def{
+          .method = verb::delete_,
+          .pattern = "/transactions/{id}",
+          .access = Access::user,
+          .fn = &TransactionHandlers::discard,
+      },
+      Def{
           .method = verb::post,
           .pattern = "/transactions/{id}/commit",
           .access = Access::user,
           .fn = &TransactionHandlers::commit,
+      },
+      Def{
+          .method = verb::post,
+          .pattern = "/transactions/{id}/retry",
+          .access = Access::user,
+          .fn = &TransactionHandlers::retry,
       },
       Def{
           .method = verb::get,
@@ -148,7 +160,9 @@ asio::awaitable<void> TransactionHandlers::list(RequestContext& ctx) {
   } else {
     co_return co_await fail(ctx, Error::make(ErrCode::validation, "box must be 'in' or 'out'"));
   }
-  const auto txs = service_.list(ctx.caller, box);
+  // Off the network threads, like every call that checks who may read: for
+  // a group target that can mean asking LDAP.
+  const auto txs = co_await offload(ctx.blocking, [&] { return service_.list(ctx.caller, box); });
   co_await ctx.exchange.send(Response::json(http::status::ok, encode_transaction_list(txs)));
 }
 
@@ -157,7 +171,7 @@ asio::awaitable<void> TransactionHandlers::get(RequestContext& ctx) {
   if (!id) {
     co_return co_await fail(ctx, id.error());
   }
-  auto tx = service_.get(ctx.caller, *id);
+  auto tx = co_await offload(ctx.blocking, [&] { return service_.get(ctx.caller, *id); });
   if (!tx) {
     co_return co_await fail(ctx, tx.error());
   }
@@ -233,6 +247,19 @@ asio::awaitable<void> TransactionHandlers::remove_file(RequestContext& ctx) {
   co_await ctx.exchange.send(Response::no_content());
 }
 
+asio::awaitable<void> TransactionHandlers::discard(RequestContext& ctx) {
+  auto id = id_param(ctx);
+  if (!id) {
+    co_return co_await fail(ctx, id.error());
+  }
+  // Deletes the transaction folder with all its files.
+  auto removed = co_await offload(ctx.blocking, [&] { return service_.discard(ctx.caller, *id); });
+  if (!removed) {
+    co_return co_await fail(ctx, removed.error());
+  }
+  co_await ctx.exchange.send(Response::no_content());
+}
+
 asio::awaitable<void> TransactionHandlers::commit(RequestContext& ctx) {
   auto id = id_param(ctx);
   if (!id) {
@@ -246,12 +273,24 @@ asio::awaitable<void> TransactionHandlers::commit(RequestContext& ctx) {
   co_await ctx.exchange.send(Response::json(http::status::ok, encode_transaction(*tx)));
 }
 
+asio::awaitable<void> TransactionHandlers::retry(RequestContext& ctx) {
+  auto id = id_param(ctx);
+  if (!id) {
+    co_return co_await fail(ctx, id.error());
+  }
+  auto tx = co_await offload(ctx.blocking, [&] { return service_.retry_forward(ctx.caller, *id); });
+  if (!tx) {
+    co_return co_await fail(ctx, tx.error());
+  }
+  co_await ctx.exchange.send(Response::json(http::status::ok, encode_transaction(*tx)));
+}
+
 asio::awaitable<void> TransactionHandlers::list_files(RequestContext& ctx) {
   auto id = id_param(ctx);
   if (!id) {
     co_return co_await fail(ctx, id.error());
   }
-  auto tx = service_.get(ctx.caller, *id);
+  auto tx = co_await offload(ctx.blocking, [&] { return service_.get(ctx.caller, *id); });
   if (!tx) {
     co_return co_await fail(ctx, tx.error());
   }
@@ -275,7 +314,7 @@ asio::awaitable<void> TransactionHandlers::download(RequestContext& ctx) {
   if (!file) {
     co_return co_await fail(ctx, file.error());
   }
-  auto tx = service_.get(ctx.caller, *id);
+  auto tx = co_await offload(ctx.blocking, [&] { return service_.get(ctx.caller, *id); });
   if (!tx) {
     co_return co_await fail(ctx, tx.error());
   }
@@ -349,6 +388,16 @@ asio::awaitable<void> TransactionHandlers::fail(RequestContext& ctx, const Error
     tlog_.error("api", "{} {}: {}: {} ({}:{})", sv(req.method_string()), sv(req.target()),
                 common::to_string(err.code), err.detail, err.origin.file_name(),
                 err.origin.line());
+  } else if (ctx.caller.is_peer) {
+    // A refused push is otherwise visible only in the sending server's log.
+    // `conflict` is a sender resuming an interrupted push: expected.
+    if (err.code == ErrCode::conflict) {
+      tlog_.info("api", "{} {} from peer {}: {}: {}", sv(req.method_string()), sv(req.target()),
+                 ctx.caller.name, common::to_string(err.code), err.detail);
+    } else {
+      tlog_.warn("api", "{} {} from peer {}: {}: {}", sv(req.method_string()), sv(req.target()),
+                 ctx.caller.name, common::to_string(err.code), err.detail);
+    }
   }
 
   if (err.code == ErrCode::forbidden) {

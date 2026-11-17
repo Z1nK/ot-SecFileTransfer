@@ -45,8 +45,16 @@ public:
   // DELETE /transactions/{id}/files/{path*} -> 204
   asio::awaitable<void> remove_file(RequestContext& ctx);
 
+  // DELETE /transactions/{id}              -> 204
+  // The sender's own transaction, only while open (409 once committed).
+  asio::awaitable<void> discard(RequestContext& ctx);
+
   // POST /transactions/{id}/commit         -> 200 + transaction
   asio::awaitable<void> commit(RequestContext& ctx);
+
+  // POST /transactions/{id}/retry          -> 200 + transaction
+  // Another attempt to forward it to its target server, now (sender only).
+  asio::awaitable<void> retry(RequestContext& ctx);
 
   // GET /transactions/{id}/files           -> 200 + file list
   asio::awaitable<void> list_files(RequestContext& ctx);

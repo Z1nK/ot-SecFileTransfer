@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/error.hpp"
+#include "common/name.hpp"
 #include "logging/tech_log.hpp"
 
 #include <algorithm>
@@ -15,15 +16,9 @@ namespace confide::config {
 
 using common::Result;
 
-// Names end up in routing (`bob@siteB`) and Basic auth (`user:pass`), so
-// keep them to a conservative charset: no '@', ':', '/', spaces. Applies to
-// instance, peer, user and group names, local or from LDAP.
-inline bool is_valid_name(std::string_view s) {
-  return !s.empty() && s.size() <= 64 && std::ranges::all_of(s, [](char c) {
-    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-'
-           || c == '_' || c == '.';
-  });
-}
+// 1-64 chars of [A-Za-z0-9._-]; defined in common so that `transaction` can
+// apply the same rule without depending on `config`.
+using common::is_valid_name;
 
 // Root of the on-disk layout: `<root>/tmp/` and `<root>/transactions/`
 struct StorageCfg {
@@ -37,6 +32,11 @@ struct RestCfg {
   uint32_t threads = 0;  // 0 = hardware_concurrency
   uint32_t blocking_threads = 0;  // 0 = 2 * hardware_concurrency, at least 4
   uint32_t request_timeout_ms = 30'000;
+  uint64_t max_upload_bytes = 0;  // largest request body (one file); 0 = no limit
+  // Reverse proxies (IPs or CIDR blocks) whose X-Forwarded-For is believed;
+  // validated by common::IpNetworks::parse. Empty = the header is ignored and
+  // the socket's address is the client.
+  std::vector<std::string> trusted_proxies{};
 };
 
 // On by default. Same cert/key serve the API and outgoing forwards.

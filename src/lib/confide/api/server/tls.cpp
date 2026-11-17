@@ -40,6 +40,8 @@ Result<ServerOptions> ServerOptions::from_config(const config::Config& cfg) {
       .threads = cfg.rest().threads,
       .blocking_threads = cfg.rest().blocking_threads,
       .request_timeout = std::chrono::milliseconds{cfg.rest().request_timeout_ms},
+      .max_upload_bytes = cfg.rest().max_upload_bytes,
+      .trusted_proxies = cfg.rest().trusted_proxies,
   };
   if (cfg.tls().enabled) {
     CFD_TRY(tls, make_tls_context(cfg.tls()));

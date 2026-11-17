@@ -1,7 +1,10 @@
 #include "config/parser.hpp"
 
+#include "common/ip_network.hpp"
+
 #include <algorithm>
 #include <format>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -50,12 +53,14 @@ Result<void> Parser::parse_rest(RestCfg& out) {
   if (tbl == nullptr) {
     return {};
   }
-  warn_unknown(*tbl, "rest.", {"bind", "port", "threads", "blocking_threads", "request_timeout_ms"});
+  warn_unknown(*tbl, "rest.", {"bind", "port", "threads", "blocking_threads", "request_timeout_ms",
+                "max_upload_bytes", "trusted_proxies"});
   CFD_TRYV(get(*tbl, "bind", "rest", out.bind));
   CFD_TRYV(get(*tbl, "port", "rest", out.port));
   CFD_TRYV(get(*tbl, "threads", "rest", out.threads));
   CFD_TRYV(get(*tbl, "blocking_threads", "rest", out.blocking_threads));
   CFD_TRYV(get(*tbl, "request_timeout_ms", "rest", out.request_timeout_ms));
+  CFD_TRYV(get(*tbl, "max_upload_bytes", "rest", out.max_upload_bytes));  // 0 = no limit
   if (out.bind.empty()) {
     return invalid("rest.bind must not be empty");
   }
@@ -70,6 +75,29 @@ Result<void> Parser::parse_rest(RestCfg& out) {
   }
   if (out.request_timeout_ms == 0) {
     return invalid("rest.request_timeout_ms must be > 0");
+  }
+  return parse_trusted_proxies(*tbl, out.trusted_proxies);
+}
+
+Result<void> Parser::parse_trusted_proxies(const toml::value& rest, std::vector<std::string>& out) {
+  if (!rest.contains("trusted_proxies")) {
+    return {};
+  }
+  const auto& list = rest.at("trusted_proxies");
+  if (!list.is_array()) {
+    return invalid("rest.trusted_proxies: expected an array of strings");
+  }
+  std::size_t i = 0;
+  for (const auto& v : list.as_array()) {
+    const std::string where = std::format("rest.trusted_proxies[{}]", i++);
+    if (!v.is_string()) {
+      return invalid(std::format("{}: expected a string", where));
+    }
+    const std::string entry = v.as_string();
+    if (auto net = common::IpNetworks::parse(std::span{&entry, 1}); !net) {
+      return invalid(std::format("{}: {}", where, net.error().detail));
+    }
+    out.push_back(entry);
   }
   return {};
 }

@@ -27,10 +27,13 @@ Result<net::Login> login(HttpClient& client, const std::string& user, const Toke
 
 Result<Session> open_session(const Global& global, Scope scope) {
   if (global.server.empty()) {
-    return fail(ErrCode::validation, "no server: use --server or FTC_SERVER");
+    return fail(ErrCode::validation,
+                "no server: use --server, FTC_SERVER or server in ftc.toml (see ftc config)");
   }
   if (global.user.empty()) {
-    return fail(ErrCode::validation, "no user: use --user or FTC_USER (could not determine the OS user)");
+    return fail(
+        ErrCode::validation,
+        "no user: use --user, FTC_USER or user in ftc.toml (could not determine the OS user)");
   }
   CFD_TRY(url, net::ServerUrl::parse(global.server));
   // Without TLS anyone on the network can read the password and the token.
@@ -44,7 +47,8 @@ Result<Session> open_session(const Global& global, Scope scope) {
     std::cerr << "ftc: warning: plain http, the password and token are sent unencrypted\n";
   }
   CFD_TRY(cache, TokenCache::for_server(url, global.user, scope == Scope::admin));
-  CFD_TRY(client, HttpClient::create(std::move(url), {.ca_file = global.ca_file, .user_agent = "ftc"}));
+  CFD_TRY(client,
+          HttpClient::create(std::move(url), {.ca_file = global.ca_file, .user_agent = "ftc"}));
   return Session{.client = std::move(client), .cache = std::move(cache), .scope = scope};
 }
 

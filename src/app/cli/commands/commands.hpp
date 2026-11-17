@@ -39,6 +39,8 @@ extern const Command kCreate;
 extern const Command kAdd;
 extern const Command kRm;
 extern const Command kCommit;
+extern const Command kDelete;
+extern const Command kRetry;
 
 // --to, --retention, --comment of `send` and `create`.
 void new_transaction_options(po::options_description& desc);
@@ -55,6 +57,9 @@ extern const Command kFiles;
 
 // commands/get.cpp
 extern const Command kGet;
+
+// commands/config.cpp
+extern const Command kConfig;
 
 // commands/admin.cpp: `ftc admin COMMAND ...`, with its own command table.
 // `args` are the words after "admin". Returns the exit code.

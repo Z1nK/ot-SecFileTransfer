@@ -47,6 +47,9 @@ public:
 
   std::optional<Transaction> find(const common::TransactionId& id) const;
 
+  // Like find() without the copy.
+  bool contains(const common::TransactionId& id) const;
+
   // Copies of all transactions matching `pred`, e.g. an inbox or the expired
   // ones for the retention job.
   std::vector<Transaction> find_if(const std::function<bool(const Transaction&)>& pred) const;

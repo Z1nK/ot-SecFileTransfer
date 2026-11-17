@@ -46,6 +46,8 @@ private:
 
   Result<void> parse_storage(StorageCfg& out);
   Result<void> parse_rest(RestCfg& out);
+  // `trusted_proxies` of `[rest]`, each entry checked as an IP or CIDR block.
+  static Result<void> parse_trusted_proxies(const toml::value& rest, std::vector<std::string>& out);
   Result<void> parse_tls(TlsCfg& out);
   Result<void> parse_auth(AuthCfg& out);
   // admin_group and the admin token times, from the `[auth]` table.

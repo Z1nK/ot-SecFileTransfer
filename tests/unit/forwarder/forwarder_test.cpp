@@ -5,12 +5,17 @@
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/write.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
+#include <format>
 #include <functional>
+#include <future>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -39,6 +44,7 @@ using confide::net::ServerUrl;
 using confide::storage::FileStore;
 using confide::transaction::Caller;
 using confide::transaction::CreateRequest;
+using confide::transaction::ForwardStatus;
 using confide::transaction::ReceiveRequest;
 using confide::transaction::ServiceOptions;
 using confide::transaction::State;
@@ -51,11 +57,6 @@ namespace fs = std::filesystem;
 using namespace std::chrono_literals;
 
 namespace {
-
-class NullSink final : public confide::logging::ILogSink {
-public:
-  void write(confide::logging::LogLevel, std::string_view) override {}
-};
 
 // Keeps the technical log, to see what the forwarder's worker did.
 class LinesSink final : public confide::logging::ILogSink {
@@ -107,11 +108,14 @@ struct Site {
                     .local_server = std::move(name),
                     .check_destination = std::move(check),
                     .is_recipient = {},
-                    .on_committed = std::move(on_committed),
+                    .on_committed = on_committed,
+                    .on_retry = on_committed,
+                    .retry_min_interval = std::chrono::seconds{0},
                 }) {}
 
   confide::common::SystemClock clock;
-  confide::logging::BusinessLog blog{std::make_unique<NullSink>(), clock};
+  LinesSink* events = new LinesSink;  // owned by blog
+  confide::logging::BusinessLog blog{std::unique_ptr<LinesSink>(events), clock};
   FileStore store;
   TransactionRepository repo;
   TransactionService service;
@@ -146,9 +150,9 @@ protected:
 
     site_b_ = std::make_unique<Site>(
         dir_ / "b", "siteB",
-        [](std::string_view user, std::string_view) -> Result<void> {
+        [](std::string_view user, std::string_view) -> Result<std::string> {
           if (user == "bob") {
-            return {};
+            return std::string{user};
           }
           return std::unexpected(Error::make(ErrCode::unknown_destination, "no such user"));
         },
@@ -177,7 +181,8 @@ protected:
     fs::remove_all(dir_, ec);
   }
 
-  void make_forwarder(const std::string& port, std::chrono::milliseconds io_timeout = 5s) {
+  void make_forwarder(const std::string& port, std::chrono::milliseconds io_timeout = 5s,
+                      std::chrono::milliseconds first_retry = 50ms) {
     forwarder_.reset();
     forwarder_ = std::make_unique<Forwarder>(
         site_a_->service, site_a_->store, tlog_,
@@ -186,8 +191,8 @@ protected:
                            .url = ServerUrl{.tls = false, .host = "127.0.0.1", .port = port},
                            .token = "a-to-b"}},
             .io_timeout = io_timeout,
-            .first_retry = 50ms,
-            .max_retry = 200ms,
+            .first_retry = first_retry,
+            .max_retry = std::max<std::chrono::milliseconds>(first_retry, 200ms),
         });
   }
 
@@ -331,7 +336,11 @@ TEST_F(ForwarderTest, UnknownUserOnThePeerIsNotRetried) {
   ASSERT_FALSE(res.has_value());
   EXPECT_EQ(res.error().code, ErrCode::unknown_destination);
   EXPECT_FALSE(Forwarder::is_transient(res.error().code));
-  EXPECT_EQ(state_on_a(tx.id), State::committed);
+  EXPECT_EQ(state_on_a(tx.id), State::committed);  // The peer logs the push it refused.
+  // TechLog writes on its own thread: wait for the line.
+  EXPECT_TRUE(eventually([&] {
+    return lines_->contains("POST /internal/transactions from peer siteA: unknown_destination");
+  }));
 }
 
 TEST_F(ForwarderTest, WrongPeerTokenIsNotRetried) {
@@ -347,6 +356,9 @@ TEST_F(ForwarderTest, WrongPeerTokenIsNotRetried) {
   ASSERT_FALSE(res.has_value());
   EXPECT_EQ(res.error().code, ErrCode::auth);
   EXPECT_FALSE(Forwarder::is_transient(res.error().code));
+  EXPECT_TRUE(eventually([&] {
+    return lines_->contains("POST /internal/transactions from 127.0.0.1: bad peer token");
+  }));
 }
 
 TEST_F(ForwarderTest, PeerDownIsTransient) {
@@ -383,9 +395,44 @@ TEST_F(ForwarderTest, WorkerKeepsRetryingWhileThePeerIsDown) {
   make_forwarder(closed_port());
   forwarder_->start();
   const auto tx = send({{"a.txt", "hello"}});
-  // Tried again after each of the 50-200 ms backoffs.
-  EXPECT_TRUE(eventually([&] { return lines_->contains("attempt 3 failed"); }));
+  // Tried again after each of the 50-200 ms backoffs; the log has the first
+  // failure and every 10th, not each one.
+  EXPECT_TRUE(eventually([&] { return lines_->contains("attempt 10 failed"); }));
+  EXPECT_TRUE(lines_->contains("attempt 1 failed"));
+  EXPECT_FALSE(lines_->contains("attempt 2 failed"));
+  EXPECT_FALSE(lines_->contains("attempt 9 failed"));
   EXPECT_EQ(state_on_a(tx.id), State::committed);
+  EXPECT_FALSE(site_a_->events->contains("forward_failed"));
+  // The sender sees why it has not arrived yet. The attempt is recorded
+  // just after its log line, so wait for it.
+  EXPECT_TRUE(eventually([&] {
+    const auto seen = site_a_->service.get(alice_, tx.id).value().forwarding;
+    return seen && seen->attempts >= 10;
+  }));
+  const auto fwd = site_a_->service.get(alice_, tx.id).value().forwarding;
+  ASSERT_TRUE(fwd);
+  EXPECT_EQ(fwd->status, ForwardStatus::retrying);
+  EXPECT_GE(fwd->attempts, 10U);
+  EXPECT_EQ(fwd->error, "unavailable");
+  EXPECT_TRUE(fwd->next_attempt_at);
+}
+
+TEST_F(ForwarderTest, DeliveryAfterFailuresSaysSo) {
+  // Site B is down at first, then comes up on the port the forwarder tries.
+  const auto port = closed_port();
+  make_forwarder(port);
+  forwarder_->start();
+  const auto tx = send({{"a.txt", "hello"}});
+  EXPECT_TRUE(eventually([&] { return lines_->contains("attempt 1 failed"); }));
+
+  HttpServer late(ServerOptions{.bind = "127.0.0.1",
+                                .port = static_cast<std::uint16_t>(std::stoi(port)),
+                                .threads = 1},
+                  router_, auth_, tlog_);
+  ASSERT_TRUE(late.start());
+  EXPECT_TRUE(eventually([&] { return state_on_a(tx.id) == State::delivered; }));
+  EXPECT_TRUE(eventually([&] { return lines_->contains(tx.id.str() + " delivered after "); }));
+  forwarder_.reset();
 }
 
 TEST_F(ForwarderTest, PermanentFailureLeavesTheQueue) {
@@ -395,6 +442,119 @@ TEST_F(ForwarderTest, PermanentFailureLeavesTheQueue) {
   std::this_thread::sleep_for(100ms);
   EXPECT_EQ(forwarder_->queued(), 0U);
   EXPECT_EQ(state_on_a(tx.id), State::committed);
+  EXPECT_TRUE(eventually(
+      [&] { return lines_->contains("not forwarded, waits for a retry or the next start"); }));
+  // Recorded just after that log line.
+  EXPECT_TRUE(eventually([&] {
+    const auto seen = site_a_->service.get(alice_, tx.id).value().forwarding;
+    return seen && seen->status == ForwardStatus::failed;
+  }));
+  const auto fwd = site_a_->service.get(alice_, tx.id).value().forwarding;
+  ASSERT_TRUE(fwd);
+  EXPECT_EQ(fwd->status, ForwardStatus::failed);
+  EXPECT_EQ(fwd->attempts, 1U);
+  EXPECT_EQ(fwd->error, "unknown_destination");
+  EXPECT_TRUE(eventually([&] {
+    return site_a_->events->contains(
+        R"("event":"forward_failed","tx":")" + tx.id.str()
+        + R"(","actor":"system","from":"alice","to":"carol","server":"siteB",)"
+          R"("error":"unknown_destination","detail":")");
+  }));
+}
+
+// A retry asked for while the forwarder waits out a long backoff goes now.
+TEST_F(ForwarderTest, RetryCutsTheBackoffShort) {
+  const auto port = closed_port();
+  make_forwarder(port, 5s, 1h);
+  forwarder_->start();
+  const auto tx = send({{"a.txt", "hello"}});
+  EXPECT_TRUE(eventually([&] { return lines_->contains("attempt 1 failed, retry in 3600s"); }));
+  // Back in the queue a moment after that log line, once the attempt is recorded.
+  EXPECT_TRUE(eventually([&] { return forwarder_->queued() == 1; }));
+
+  HttpServer late(ServerOptions{.bind = "127.0.0.1",
+                                .port = static_cast<std::uint16_t>(std::stoi(port)),
+                                .threads = 1},
+                  router_, auth_, tlog_);
+  ASSERT_TRUE(late.start());
+  ASSERT_TRUE(site_a_->service.retry_forward(alice_, tx.id).has_value());  // -> enqueue
+  EXPECT_LE(forwarder_->queued(), 1U);  // moved up (or taken already), not added twice
+  EXPECT_TRUE(eventually([&] { return state_on_a(tx.id) == State::delivered; }));
+  EXPECT_FALSE(site_a_->service.get(alice_, tx.id).value().forwarding);
+  forwarder_.reset();
+}
+
+// A permanent failure leaves the queue; a retry once it is fixed brings it back.
+TEST_F(ForwarderTest, RetryAfterAFailureIsPushedAgain) {
+  forwarder_->start();
+  const auto tx = send({{"a.txt", "hello"}}, true, "carol");
+  EXPECT_TRUE(eventually([&] {
+    const auto fwd = site_a_->service.get(alice_, tx.id).value().forwarding;
+    return fwd && fwd->status == ForwardStatus::failed;
+  }));
+  ASSERT_TRUE(site_a_->service.retry_forward(alice_, tx.id).has_value());
+  // carol still does not exist on B: it fails again, one attempt more.
+  EXPECT_TRUE(eventually([&] {
+    const auto fwd = site_a_->service.get(alice_, tx.id).value().forwarding;
+    return fwd && fwd->status == ForwardStatus::failed && fwd->attempts == 2;
+  }));
+}
+
+// A retry that comes in while the push it wants repeated is still the active
+// one is not lost when that push then fails for good: it is queued once more,
+// after first_retry.
+TEST_F(ForwarderTest, RetryDuringAPushIsNotLost) {
+  // A peer that takes the request and refuses it only when told to.
+  asio::io_context io;
+  asio::ip::tcp::acceptor acceptor{io, {asio::ip::make_address("127.0.0.1"), 0}};
+  std::promise<void> answer;
+  std::thread peer([&] {
+    boost::system::error_code ec;
+    auto socket = acceptor.accept(ec);
+    std::array<char, 4096> request{};
+    socket.read_some(asio::buffer(request), ec);
+    answer.get_future().wait();
+    const std::string_view body = R"({"error":"unknown_destination","detail":"no such user"})";
+    const auto reply = std::format("HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\n"
+                                   "Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                                   body.size(), body);
+    asio::write(socket, asio::buffer(reply), ec);
+    socket.shutdown(asio::ip::tcp::socket::shutdown_send, ec);
+    while (socket.read_some(asio::buffer(request), ec) > 0) {
+    }
+  });
+  make_forwarder(std::to_string(acceptor.local_endpoint().port()), 5s, 1h);
+  forwarder_->start();
+  const auto tx = send({{"a.txt", "hello"}}, true, "carol");
+  EXPECT_TRUE(eventually([&] { return forwarder_->queued() == 0; }));  // push in progress
+
+  forwarder_->enqueue(tx.id);
+  EXPECT_EQ(forwarder_->queued(), 0U);  // not twice while it is active
+  answer.set_value();
+  EXPECT_TRUE(eventually([&] {
+    const auto fwd = site_a_->service.get(alice_, tx.id).value().forwarding;
+    return fwd && fwd->status == ForwardStatus::failed;
+  }));
+  // Failed for good, yet back in the queue: the retry was asked for.
+  EXPECT_TRUE(eventually([&] { return forwarder_->queued() == 1; }));
+  forwarder_.reset();
+  peer.join();
+}
+
+TEST_F(ForwarderTest, EnqueueDoesNotDuplicateTheTransactionBeingPushed) {
+  // Accepts connections but never answers: the push stays in progress.
+  asio::io_context io;
+  const asio::ip::tcp::acceptor silent{io, {asio::ip::make_address("127.0.0.1"), 0}};
+  make_forwarder(std::to_string(silent.local_endpoint().port()), 1h);
+  forwarder_->start();
+  const auto tx = send({{"a.txt", "hello"}});
+  EXPECT_TRUE(eventually([&] { return forwarder_->queued() == 0; }));  // push in progress
+
+  forwarder_->enqueue(tx.id);
+  EXPECT_EQ(forwarder_->queued(), 0U);
+  forwarder_->stop();
+  // Cancelled by stop(), which is not a failure to show the sender.
+  EXPECT_FALSE(site_a_->service.get(alice_, tx.id).value().forwarding);
 }
 
 TEST_F(ForwarderTest, StopAbortsAStalledPush) {

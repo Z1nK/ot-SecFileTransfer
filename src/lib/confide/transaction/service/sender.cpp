@@ -41,8 +41,10 @@ Result<Transaction> TransactionService::create(const Caller& caller, const Creat
   const bool local_target = req.target_server.empty() || req.target_server == options_.local_server;
   const std::string target_server = local_target ? std::string{} : req.target_server;
 
+  std::string target_user = req.target_user;
   if (options_.check_destination) {
-    CFD_TRYV(options_.check_destination(req.target_user, target_server));
+    CFD_TRY(canonical, options_.check_destination(req.target_user, target_server));
+    target_user = std::move(canonical);
   }
 
   const auto created = clock_.now();
@@ -52,7 +54,7 @@ Result<Transaction> TransactionService::create(const Caller& caller, const Creat
   Transaction tx{
       .id = common::TransactionId::generate(),
       .sender = caller.name,
-      .target_user = req.target_user,
+      .target_user = std::move(target_user),
       .target_server = target_server,
       .origin_server = {},
       .comment = req.comment,
@@ -69,7 +71,7 @@ Result<Transaction> TransactionService::create(const Caller& caller, const Creat
 Result<PendingUpload> TransactionService::begin_upload(const Caller& caller,
                                                        const common::TransactionId& id,
                                                        const common::RelativePath& path) {
-  const auto mu = lock_for(id);
+  CFD_TRY(mu, lock_existing(id));
   const std::scoped_lock lock(*mu);
 
   const auto tx = repo_.find(id);
@@ -87,7 +89,7 @@ Result<PendingUpload> TransactionService::begin_upload(const Caller& caller,
 }
 
 Result<FileEntry> PendingUpload::finish(const std::optional<common::Sha256Digest>& expected) {
-  const auto mu = service_->lock_for(id_);
+  CFD_TRY(mu, service_->lock_existing(id_));
   const std::scoped_lock lock(*mu);
 
   auto tx = service_->repo_.find(id_);
@@ -113,7 +115,7 @@ Result<FileEntry> PendingUpload::finish(const std::optional<common::Sha256Digest
 
 Result<void> TransactionService::remove_file(const Caller& caller, const common::TransactionId& id,
                                              const common::RelativePath& path) {
-  const auto mu = lock_for(id);
+  CFD_TRY(mu, lock_existing(id));
   const std::scoped_lock lock(*mu);
 
   auto tx = repo_.find(id);
@@ -143,7 +145,7 @@ Result<Transaction> TransactionService::commit(const Caller& caller,
                                                const common::TransactionId& id) {
   std::optional<Transaction> committed;
   {
-    const auto mu = lock_for(id);
+    CFD_TRY(mu, lock_existing(id));
     const std::scoped_lock lock(*mu);
 
     auto found = repo_.find(id);
@@ -181,6 +183,65 @@ Result<Transaction> TransactionService::commit(const Caller& caller,
     options_.on_committed(*committed);
   }
   return std::move(*committed);
+}
+
+Result<Transaction> TransactionService::retry_forward(const Caller& caller,
+                                                      const common::TransactionId& id) {
+  std::optional<Transaction> queued;
+  {
+    CFD_TRY(mu, lock_existing(id));
+    const std::scoped_lock lock(*mu);
+
+    auto found = repo_.find(id);
+    if (!found) {
+      return not_found(id);
+    }
+    auto tx = std::move(*found);
+    if (!is_sender(caller, tx)) {
+      return forbidden(id);
+    }
+    if (tx.state == State::expired) {
+      return fail(ErrCode::gone, "transaction has expired");
+    }
+    if (!is_outgoing(tx)) {
+      return fail(ErrCode::conflict,
+                  std::format("transaction {} is {}{}, not waiting to be forwarded", id.str(),
+                              to_string(tx.state),
+                              tx.target_server.empty() ? " for a local user" : ""));
+    }
+    // Keeps attempts and the last error: the sender still sees why it
+    // failed until the next attempt says otherwise. Already `pending`: the
+    // attempt is scheduled, asking again neither moves it nor writes.
+    if (tx.forwarding && tx.forwarding->status != ForwardStatus::pending) {
+      auto& fwd = *tx.forwarding;
+      auto at = clock_.now();
+      if (fwd.last_attempt_at) {
+        at = std::max(at, *fwd.last_attempt_at + options_.retry_min_interval);
+      }
+      if (fwd.status == ForwardStatus::retrying && fwd.next_attempt_at) {
+        at = std::min(at, *fwd.next_attempt_at);  // never later than it was going to be
+      }
+      fwd.status = ForwardStatus::pending;
+      fwd.next_attempt_at = at;
+      CFD_TRYV(repo_.save(tx));
+    }
+    queued = std::move(tx);
+  }
+
+  if (options_.on_retry) {
+    options_.on_retry(*queued);
+  }
+  return std::move(*queued);
+}
+
+Result<void> TransactionService::discard(const Caller& caller, const common::TransactionId& id) {
+  return destroy(id, BizEventType::discarded, caller, [&](const Transaction& tx) -> Result<void> {
+    // The sender only: not the target, and not the peer that pushed it.
+    if (!is_sender(caller, tx)) {
+      return forbidden(id);
+    }
+    return require_mutable(tx.state);
+  });
 }
 
 }  // namespace confide::transaction

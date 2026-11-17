@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <chrono>
 #include <functional>
 #include <optional>
 #include <string>
@@ -54,10 +55,14 @@ enum class Box : std::uint8_t {
   out,  // transactions the caller sent
 };
 
-// `unknown_destination` if the user or server is not known. Wired by
-// `main` to auth's UserStore (local target) and PeerRegistry (remote).
-using DestinationCheck =
-    std::function<Result<void>(std::string_view target_user, std::string_view target_server)>;
+// `unknown_destination` if the user or server is not known; otherwise the
+// target's name as the user directory spells it, which is the one to store.
+// An LDAP directory finds "Alice" when asked for "alice", but the user logs in
+// as "alice": a transaction kept under the typed name would never reach them.
+// Wired by `main` to the user directory (local target) and the peer list
+// (remote, where the name is returned as given).
+using DestinationCheck = std::function<Result<std::string>(std::string_view target_user,
+                                                           std::string_view target_server)>;
 
 // True if `user` is a member of the group named `target`. Lets group
 // members read transactions addressed to the group. Wired by `main` to the
@@ -77,6 +82,11 @@ struct ServiceOptions {
   DestinationCheck check_destination;
   MembershipCheck is_recipient;  // may be empty: only exact name matches
   CommitHook on_committed;  // may be empty
+  CommitHook on_retry;      // after retry_forward(), outside the lock; may be empty
+  // retry_forward() schedules the attempt no sooner than this after the last
+  // failed one, so a sender cannot make the server hammer a peer. `main` sets
+  // it to the forwarder's first retry wait.
+  std::chrono::seconds retry_min_interval{5};
 };
 
 }  // namespace confide::transaction

@@ -63,7 +63,7 @@ timed_ftc() {
   ftc_time() { /usr/bin/time -f "%e %M" -o "$stats" "$@"; }
   local user=$1 site=$2
   shift 2
-  FTC_PASSWORD="pw-$user" XDG_STATE_HOME="$WORK/ftc-state" ftc_time \
+  FTC_PASSWORD="pw-$user" XDG_STATE_HOME="$WORK/ftc-state" FTC_CONFIG= ftc_time \
     "$BIN/ftc" -s "https://localhost:${SITE_PORT[$site]}" -u "$user" \
     --ca-file "$WORK/cert.pem" "$@" >"$WORK/ftc.out"
   out=$(cat "$stats")

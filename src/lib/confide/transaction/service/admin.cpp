@@ -54,7 +54,7 @@ Result<Transaction> TransactionService::set_retention(const Caller& admin,
     return fail(ErrCode::validation,
                 std::format("days must be 1..{}, got {}", options_.max_retention_days, days));
   }
-  const auto mu = lock_for(id);
+  CFD_TRY(mu, lock_existing(id));
   const std::scoped_lock lock(*mu);
   auto tx = repo_.find(id);
   if (!tx) {

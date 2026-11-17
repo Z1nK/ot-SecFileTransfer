@@ -73,6 +73,27 @@ TEST(LoginLimiter, OneAddressGuessingManyNamesIsThrottled) {
   EXPECT_FALSE(throttled(l, "someone-else", "b"));
 }
 
+TEST(LoginLimiter, OldFailuresAreForgotten) {
+  FakeClock clock;
+  auto options = kOptions;
+  options.forget_after = seconds{100};
+  LoginLimiter l(clock, options);
+
+  // Five typos by different people behind one address use up its allowance.
+  const char* names[] = {"u1", "u2", "u3", "u4", "u5"};
+  for (const char* n : names) {
+    l.failed(n, "a");
+  }
+  clock.advance(seconds{99});
+  l.failed("u6", "a");  // still counted with the old ones: 6 > 5
+  EXPECT_TRUE(throttled(l, "someone-else", "a"));
+
+  // Quiet for forget_after: the next typo is the first again.
+  clock.advance(seconds{100});
+  l.failed("u7", "a");
+  EXPECT_FALSE(throttled(l, "someone-else", "a"));
+}
+
 TEST(LoginLimiter, SuccessClearsTheUserButNotTheAddress) {
   FakeClock clock;
   LoginLimiter l(clock, kOptions);

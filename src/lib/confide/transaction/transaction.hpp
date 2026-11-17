@@ -40,6 +40,34 @@ std::string_view to_string(State state);
 // `validation` for anything to_string() does not produce.
 Result<State> parse_state(std::string_view text);
 
+// How forwarding to the target server goes, for a committed transaction
+// created here for a user on another server. Not a State: the transaction
+// stays `committed` until a push succeeds, whatever happened before.
+enum class ForwardStatus : std::uint8_t {
+  pending,   // not tried yet, or a retry was asked for
+  retrying,  // the last attempt failed with an error that may go away
+  failed,    // refused for good; waits for `ftc retry` or the next server start
+};
+
+std::string_view to_string(ForwardStatus status);
+
+// `validation` for anything to_string() does not produce.
+Result<ForwardStatus> parse_forward_status(std::string_view text);
+
+// Outcome of the forwarder's attempts so far. Only the forwarder (through
+// TransactionService) writes it; cleared when the push succeeds. It holds
+// the error code only: what the peer or the network said goes to the logs,
+// not into what the sender can read.
+struct ForwardInfo {
+  ForwardStatus status = ForwardStatus::pending;
+  std::uint32_t attempts = 0;  // failed attempts, across server restarts
+  std::optional<common::Timestamp> last_attempt_at{};
+  std::optional<common::Timestamp> next_attempt_at{};  // when `retrying`
+  std::string error{};  // ErrCode name of the last failure
+
+  bool operator==(const ForwardInfo&) const = default;
+};
+
 // A payload file as recorded when its upload finished. The digest is checked
 // again against the bytes on disk at commit
 struct FileEntry {
@@ -65,6 +93,9 @@ struct Transaction {
   std::optional<common::Timestamp> committed_at{};
   std::optional<common::Timestamp> delivered_at{};
   std::vector<FileEntry> files{};  // sorted by path
+  // Sender side of a remote target, once an attempt failed or a retry was
+  // asked for. nullopt = nothing to report (not tried yet, or delivered).
+  std::optional<ForwardInfo> forwarding{};
 
   // nullptr if the transaction has no file with this path.
   const FileEntry* find_file(const common::RelativePath& path) const;

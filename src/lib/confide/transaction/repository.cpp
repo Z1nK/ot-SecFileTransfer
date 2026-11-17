@@ -94,6 +94,11 @@ std::optional<Transaction> TransactionRepository::find(const common::Transaction
   return it->second;
 }
 
+bool TransactionRepository::contains(const common::TransactionId& id) const {
+  const std::scoped_lock lock(mu_);
+  return index_.contains(id);
+}
+
 std::vector<Transaction>
 TransactionRepository::find_if(const std::function<bool(const Transaction&)>& pred) const {
   const std::scoped_lock lock(mu_);

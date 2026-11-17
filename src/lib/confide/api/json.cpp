@@ -95,6 +95,33 @@ json::object file_object(const transaction::FileEntry& f) {
   };
 }
 
+// What the sender may know about a failed push: that the recipient does not
+// exist there, or that forwarding failed. Which error it was (peer down,
+// wrong token, TLS, ...) describes the servers and is for the logs only.
+std::string_view public_forward_error(std::string_view error) {
+  return error == "unknown_destination" ? "unknown_destination" : "forwarding_error";
+}
+
+// Forwarding status of a committed transaction created here for another
+// server, as its sender sees it: "pending" until an attempt failed.
+json::object forwarding_object(const transaction::Transaction& tx) {
+  const transaction::ForwardInfo f = tx.forwarding.value_or(transaction::ForwardInfo{});
+  json::object obj{
+      {"status", transaction::to_string(f.status)},
+      {"attempts", f.attempts},
+  };
+  if (f.last_attempt_at) {
+    obj["last_attempt_at"] = common::format_iso8601(*f.last_attempt_at);
+  }
+  if (f.next_attempt_at) {
+    obj["next_attempt_at"] = common::format_iso8601(*f.next_attempt_at);
+  }
+  if (!f.error.empty()) {
+    obj["error"] = public_forward_error(f.error);
+  }
+  return obj;
+}
+
 json::object transaction_object(const transaction::Transaction& tx) {
   json::object obj{
       {"id", tx.id.str()},
@@ -102,6 +129,9 @@ json::object transaction_object(const transaction::Transaction& tx) {
       {"sender", tx.sender},
       {"target_user", tx.target_user},
       {"target_server", tx.target_server},
+      // The peer that pushed it, "" if it was created here: `sender` alone
+      // does not tell alice@siteB from the alice of this server.
+      {"origin_server", tx.origin_server},
       {"comment", tx.comment},
       {"created_at", common::format_iso8601(tx.created_at)},
       {"expires_at", common::format_iso8601(tx.expires_at)},
@@ -111,6 +141,10 @@ json::object transaction_object(const transaction::Transaction& tx) {
   }
   if (tx.delivered_at) {
     obj["delivered_at"] = common::format_iso8601(*tx.delivered_at);
+  }
+  if (tx.state == transaction::State::committed && tx.origin_server.empty()
+      && !tx.target_server.empty()) {
+    obj["forwarding"] = forwarding_object(tx);
   }
   obj["file_count"] = tx.files.size();
   obj["total_bytes"] = tx.total_bytes();
@@ -199,7 +233,6 @@ std::string encode_file(const transaction::FileEntry& file) {
 
 std::string encode_admin_transaction(const transaction::Transaction& tx) {
   auto obj = transaction_object(tx);
-  obj["origin_server"] = tx.origin_server;
   json::array files;
   files.reserve(tx.files.size());
   for (const auto& f : tx.files) {
@@ -213,9 +246,7 @@ std::string encode_admin_transaction_list(const std::vector<transaction::Transac
   json::array arr;
   arr.reserve(txs.size());
   for (const auto& tx : txs) {
-    auto obj = transaction_object(tx);
-    obj["origin_server"] = tx.origin_server;
-    arr.push_back(std::move(obj));
+    arr.push_back(transaction_object(tx));
   }
   return json::serialize(json::object{{"transactions", std::move(arr)}});
 }

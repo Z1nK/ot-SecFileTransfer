@@ -23,7 +23,7 @@ and [dev_info.md](dev_info.md) for how to add features.
 | retention: expired transactions are deleted every `sweep_interval_s` | |
 | Basic auth and user tokens (`ftc login`), login throttling, access rules, path checks | |
 | business and technical logs, log rotation | |
-| `ftc` client: `login`, `logout`, `send`, `inbox`, `outbox`, `show`, `files`, `get` | |
+| `ftc` client: `login`, `logout`, `send`, `inbox`, `outbox`, `show`, `files`, `get`, `retry` | |
 | unit tests, a two-server end-to-end test, a benchmark with a memory check | |
 
 ## 1. Build
@@ -184,6 +184,8 @@ Everything else has a default. Unknown keys give a warning in the technical log.
 | `rest.threads` | `0` | worker threads, `0` = number of CPU cores |
 | `rest.blocking_threads` | `0` | threads for disk writes/reads and password checks (LDAP), so a slow disk or directory doesn't stall the network threads; about the number of uploads/downloads you expect at once. `0` = 2 × CPU cores, at least 4 |
 | `rest.request_timeout_ms` | `30000` | request timeout |
+| `rest.max_upload_bytes` | `0` | largest single file a client (or peer) may upload, in bytes; a larger one is refused with 400 before any of it is read. `0` = no limit: any user can then fill the disk |
+| `rest.trusted_proxies` | `[]` | reverse proxies (IPs or CIDR blocks, `["10.0.0.5", "fd00::/8"]`) whose `X-Forwarded-For` names the client, for login throttling and logs. Empty = the header is ignored. See [Behind a reverse proxy](#behind-a-reverse-proxy) |
 | `tls.enabled` | `true` | HTTPS on/off. `false` sends passwords and files in clear text: local testing only |
 | `tls.cert`, `tls.key` | — | PEM certificate and key, required when TLS is on |
 | `tls.ca` | system CAs | CA bundle to verify peer servers |
@@ -218,11 +220,30 @@ certificate must name `host`. Each pair of servers shares two tokens, one per di
 siteA's `token` is siteB's `accept_token` for siteA, and the other way round.
 
 After a commit to `bob@siteB`, siteA pushes the transaction to siteB in the
-background and marks it `delivered`; `ftc show ID` on siteA tells you which. If
-siteB can't be reached, siteA retries after 5 s, 10 s, 20 s ... up to every 10
-minutes, and again after a restart. Errors that a retry can't fix (no user `bob` on
-siteB, wrong token) are logged in siteA's `technical.log`; the transaction then
-stays `committed` until the next start.
+background and marks it `delivered`. If siteB can't be reached, siteA retries after
+5 s, 10 s, 20 s ... up to every 10 minutes, and again after a restart. Errors that a
+retry can't fix (no user `bob` on siteB, wrong token) are logged in both servers'
+`technical.log` and as `forward_failed` in siteA's `business.log`; the transaction
+then stays `committed` until `ftc retry ID` or the next start.
+
+Until it is delivered, the sender sees how forwarding goes: `ftc outbox` shows
+`pending`, `retrying` or `failed` instead of `committed`, with a line saying why,
+and `ftc show ID` has the details (`forwarding.status`, `.attempts`,
+`.last_attempt_at`, `.next_attempt_at`, `.error`). The sender is told one of two
+reasons only: `unknown_destination` (no such user on that server) or
+`forwarding_error` (anything else). What exactly went wrong between the servers
+(peer down, wrong token, TLS, ...) is in `technical.log` and `business.log`, for
+the administrator:
+
+```
+ID                                    STATE      TO                        FILES         BYTES  CREATED               COMMENT
+3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b  failed     nobody@siteB                  1             6  2026-11-12T10:00:00Z
+3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b: not delivered: no such user on that server; once fixed: ftc retry 3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b
+```
+
+`ftc retry ID` asks for another attempt: after `failed` once the cause is
+fixed, or to skip the wait while `retrying`. The server tries no sooner than 5 s
+after the last failed attempt, however often it is asked.
 
 ### Minimal local config
 
@@ -290,10 +311,12 @@ User requests carry either HTTP Basic auth (`curl -u user:password`) or a user t
 | `DELETE` | `/auth/token` | log out: the Bearer token of the request stops working |
 | `POST` | `/transactions` | create; body `{"target_user": "bob", "target_server": "", "retention_days": 30, "comment": "Q3 reports"}` (only `target_user` is required; `comment` is at most 256 characters, no control characters) |
 | `GET` | `/transactions?box=in\|out` | my incoming (default) or outgoing transactions |
-| `GET` | `/transactions/{id}` | one transaction and its state |
+| `GET` | `/transactions/{id}` | one transaction and its state; a committed one for another server also has `forwarding` (`status` = `pending`/`retrying`/`failed`, `attempts`, times, last `error` = `unknown_destination` or `forwarding_error`) |
 | `PUT` | `/transactions/{id}/files/{path}` | upload a file (raw body). Optional header `X-Checksum-SHA256: <hex>` |
 | `DELETE` | `/transactions/{id}/files/{path}` | remove a file (only while `open`) |
 | `POST` | `/transactions/{id}/commit` | lock the transaction |
+| `DELETE` | `/transactions/{id}` | delete my own transaction with its files, only while `open` (409 once committed) |
+| `POST` | `/transactions/{id}/retry` | forward my committed transaction to its target server again, at least 5 s after the last failed attempt (409 if it is local or already delivered) |
 | `GET` | `/transactions/{id}/files` | list files with size and sha256 |
 | `GET` | `/transactions/{id}/files/{path}` | download a file; the response has `X-Checksum-SHA256` |
 | `POST`/`PUT` | `/internal/transactions/...` | server-to-server, peer Bearer token only |
@@ -314,6 +337,18 @@ restart logs everybody out. After 5 wrong passwords for one user from one addres
 from one address, 50 for one user), the server stops checking passwords for that key
 for 30 s, doubling up to 15 min; with LDAP this keeps the server from being used to run
 accounts into the directory's own lockout.
+
+### Behind a reverse proxy
+
+Behind a proxy every request comes from the proxy's address, so the per-address limit
+above (20 wrong passwords) would block all users at once. List the proxy in
+`rest.trusted_proxies` and have it set `X-Forwarded-For` (nginx:
+`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`). The header is read
+only on connections from a listed proxy. Its entries are taken right to left, skipping
+listed proxies, and the first other address is the client. Entries further left were
+written by the client and are ignored. A listed proxy that sends no header (health
+check) counts as the client itself; the server logs this once. Only list proxies you
+run, and make the server's port reachable through them only.
 
 ### Full flow with curl
 
@@ -352,7 +387,8 @@ Use `--data-binary` (not `-d`) for uploads, so curl does not change the file.
 with its SHA-256 and commits. `ftc get` downloads all files of a transaction and checks
 each SHA-256 before it keeps the file.
 
-The server comes from `-s` / `FTC_SERVER`, the user from `-u` / `FTC_USER`. The first
+The server comes from `-s` / `FTC_SERVER`, the user from `-u` / `FTC_USER`, or from a
+config file (see [Client configuration](#client-configuration) below). The first
 command (or `ftc login`) asks for the password on the terminal without echo, trades it
 for a token and saves the token in
 `$XDG_STATE_HOME/ftc/tokens/<user>@<host>_<port>` (default `~/.local/state/...`, folder
@@ -410,13 +446,50 @@ Notes:
 
 - `--to bob@siteB` sends to a user on another server, `--retention DAYS` sets `retention_days`.
 - `--comment "Q3 reports"` (`-m`) attaches a short note, shown in the COMMENT column of `inbox`/`outbox`.
-- `ftc outbox` lists the transactions you sent.
+- `ftc outbox` lists the transactions you sent. One on its way to another server shows
+  `pending`, `retrying` or `failed` as its state until it is `delivered`.
+- `ftc retry ID` tries again shortly to forward a transaction you sent to another server.
 - `get` does not overwrite existing files unless you add `--force`.
 - If an upload fails, `send` prints the id of the transaction it left `open`; finish it with
-  `add` and `commit`.
+  `add` and `commit`, or remove it with `ftc delete ID`.
+- `ftc delete ID` deletes a transaction you created, with its files, while it is still `open`;
+  after `commit` it fails with `conflict` (only an admin can delete it then).
 - `add` replaces a file already in the transaction under the same path. `add` and `rm` only
   work while the transaction is `open`; after `commit` they fail with `conflict`.
 - With TLS, use an `https://` URL and `--ca-file cert.pem` (or `FTC_CA_FILE`) for a self-signed certificate.
+
+### Client configuration
+
+ftc takes the server, the user and the CA bundle from the first of these that has the setting:
+
+| Priority | Source | Server | User | CA bundle |
+|---|---|---|---|---|
+| 1 | command line | `-s URL` | `-u NAME` | `--ca-file PATH` |
+| 2 | environment | `FTC_SERVER` | `FTC_USER` | `FTC_CA_FILE` |
+| 3 | user config | `server` | `user` | `ca_file` in `~/.config/ftc/ftc.toml` (`$XDG_CONFIG_HOME/ftc/ftc.toml`) |
+| 4 | system config | `server` | `user` | `ca_file` in `/etc/ftc/ftc.toml` |
+| — | default | none | your OS login name | system CAs |
+
+Every config file is optional, and each one may set only some of the keys:
+
+```toml
+# /etc/ftc/ftc.toml, installed (all commented out) by the confide-client package
+server = "https://ftc.example.org:8443"
+ca_file = "/etc/ftc/ca.pem"     # a relative path is relative to this file's folder
+```
+
+- An empty value at a higher level (`FTC_CA_FILE=`, `ca_file = ""`) brings back the default.
+- `--config PATH` / `FTC_CONFIG=PATH` reads only that file instead of the user and system files
+  (it must exist); `FTC_CONFIG=` reads none.
+- A file that can't be read or isn't valid TOML stops ftc (exit code 2) with a message naming the
+  file. Unknown keys are ignored with a warning.
+- The password is never read from a file. `--allow-http` is command line only, so a config
+  file can't quietly turn off TLS.
+- `ftc config` shows the values in use and where each comes from; `ftc config --get server`
+  prints one value, for scripts.
+- On Windows the files are `%PROGRAMDATA%\ftc\ftc.toml` and `%APPDATA%\ftc\ftc.toml`.
+- The package keeps `/etc/ftc/ftc.toml` on upgrade once you edit it (a deb conffile,
+  `%config(noreplace)` in the rpm).
 
 ### Administration
 

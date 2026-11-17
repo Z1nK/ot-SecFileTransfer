@@ -57,6 +57,9 @@ Result<void> LoginLimiter::check(std::string_view user, std::string_view source)
 
 void LoginLimiter::bump(const std::string& key, std::uint32_t free, Timestamp now) {
   auto& e = entries_[key];
+  if (e.failures != 0 && e.last_failure + options_.forget_after <= now) {
+    e = Entry{};  // quiet long enough: old failures no longer count
+  }
   ++e.failures;
   e.last_failure = now;
   if (e.failures <= free) {

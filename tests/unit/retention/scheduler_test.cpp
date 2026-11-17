@@ -72,7 +72,8 @@ protected:
                                                                    .max_retention_days = 7,
                                                                    .check_destination = {},
                                                                    .is_recipient = {},
-                                                                   .on_committed = {}});
+                                                                   .on_committed = {},
+                                                                   .on_retry = {}});
   }
   void TearDown() override {
     service_.reset();

@@ -191,7 +191,7 @@ External libraries, per target:
 | `api` | Boost (Asio, Beast), OpenSSL::SSL, Threads | Boost.JSON |
 | `net` | Boost (headers) | Boost.JSON, OpenSSL::SSL, Threads |
 | `forwarder` | | Boost.JSON |
-| `client` | Boost (headers), Boost.JSON | |
+| `client` | Boost (headers), Boost.JSON | toml11 (config files) |
 | `ftc` | | Boost.JSON, Boost.ProgramOptions, OpenSSL::SSL, Threads |
 
 ### Error model
@@ -420,7 +420,9 @@ Impl::dispatch(ex)
 │   └── nothing matched                        -> Error notfound -> 404
 ├── on error: ex.send(Response::error(...)), return
 │
-├── source = ex.remote_address()             // client IP, for the LoginLimiter
+├── source = client_address(req, ex.remote_address())   // done in serve_requests()
+│     // canonical IP; via X-Forwarded-For only when the socket peer is in
+│     // rest.trusted_proxies (common::client_address, rightmost untrusted hop)
 ├── switch route.access:                     // all inside offload(blocking, ...)
 │     peer     -> auth.authenticate_peer(req)
 │     password -> auth.authenticate_password(req, source)
@@ -767,6 +769,15 @@ worker thread on the sender's server that calls the peer's `/internal` API
 ```
 service.commit(alice, id)              // target_server = "siteB"
 └── on_committed(tx) -> forwarding.enqueue(id)        // after the lock is released
+service.retry_forward(alice, id)       // POST /transactions/{id}/retry, sender only
+├── forwarding.status = pending, next_attempt_at = max(now, last_attempt_at + 5 s)
+│     (retry_min_interval = the forwarder's first_retry; already pending: unchanged)
+└── on_retry(tx) -> forwarding.enqueue(id, next_attempt_at - now)
+
+Forwarder::enqueue(id, delay = 0)
+├── id being pushed right now (active_id_)  -> retry_asked_ = true
+├── id in the queue, waiting for a retry    -> due = min(due, now + delay) (attempts kept)
+└── otherwise                               -> appended, due = now + delay
 
 Forwarder::run()                       // one worker thread, one push at a time
 ├── wait until the earliest Pending.due (enqueue() and stop() wake it)
@@ -785,11 +796,30 @@ Forwarder::run()                       // one worker thread, one push at a time
 │   ├── POST /internal/transactions/{id}/commit     // peer re-hashes, logs `received`
 │   └── service.mark_delivered(id)     // committed -> delivered, blog `forwarded`
 └── on error:
+      cancelled by stop()  -> nothing recorded; queued again on next start
       unavailable / throttled / internal / io / integrity
           -> back into the queue, due in 5 s, 10 s, 20 s ... capped at 10 min
+             service.record_forward_failure(id, err, wait)   // status `retrying`
       anything else (unknown user on the peer, wrong peer token, ...)
-          -> tlog.error, dropped; stays `committed` and is queued again on next start
+          -> tlog.error, dropped; stays `committed` until a retry or the next start
+             service.record_forward_failure(id, err, nullopt) // `failed`, blog `forward_failed`
+      retry_asked_ (enqueue() of this id during the push)
+          -> queued once more, due in first_retry: a retry that arrives just
+             after the push was recorded as failed is not lost, and asking in
+             a loop does not become pushing in a loop
 ```
+
+`Transaction::forwarding` (`ForwardInfo`, in meta.json) is what the sender
+sees of this: status `pending` / `retrying` / `failed`, failed attempts so far
+(across restarts), last and next attempt time and the error code of the last
+failure. The error's detail (what the peer or the network said) is not kept
+there: it goes to the technical log and, for `forward_failed`, the business
+log. The API narrows the code further, to `unknown_destination` or
+`forwarding_error` (`public_forward_error()` in api/json.cpp), so a sender
+learns nothing about the servers' setup. It is not a `State`: the transaction stays `committed`, so
+retention, access rules and `list_outgoing()` do not change. The API shows it
+as `forwarding` on committed transactions created here for another server
+(`"status":"pending"` until an attempt failed); `mark_delivered()` clears it.
 
 `forwarding.start()` queues everything `service.list_outgoing()` returns, so
 a push cut short by a restart is redone. Every network operation of the
@@ -886,7 +916,9 @@ main: signal_io.run() returns -> server.wait() joins all threads
 - **Business log** (`business.log`, `logging::BusinessLog::record(BizEvent)`):
   one event per business action: `tx_created`, `file_added`, `file_removed`,
   `committed`, `received`, `downloaded`, `expired` (retention sweep),
-  `forwarded` once the peer confirmed a push (`mark_delivered()`), and the
+  `forwarded` once the peer confirmed a push (`mark_delivered()`),
+  `forward_failed` (`error`, `detail`) when the forwarder gives up on a push
+  until a retry or the next start (`record_forward_failure()`), and the
   admin actions `admin_deleted`, `retention_changed` (`days`) and
   `sessions_revoked` (`user`, no `tx`). `GET /admin/log` reads it back with
   `logging::read_business_log()`.
@@ -894,8 +926,14 @@ main: signal_io.run() returns -> server.wait() joins all threads
   start/stop, a summary line when a sweep removed something, and a warning
   per failed `expire()`.
 - The forwarder (tag `forwarder`): start/stop, how many transactions were
-  left from before, one line per delivered transaction, a warning per failed
-  attempt with the time until the retry, and an error when it gives up.
+  left from before, one line per delivered transaction (plus how many
+  attempts failed before, if any), a warning for a failed attempt with the
+  time until the retry, and an error when it gives up. Failed attempts are
+  logged for the first one, when the error code changes, and every
+  `ForwarderOptions::log_every` (10) attempts, not each one.
+- The receiving side of a push (tag `api`): a warning for a bad peer token
+  and for every request a peer makes on `/internal/*` that is refused with
+  a 4xx (`info` for `conflict`, which is a sender resuming a push).
 
 ---
 
@@ -905,6 +943,7 @@ main: signal_io.run() returns -> server.wait() joins all threads
 [dispatch.cpp](src/app/cli/dispatch.cpp) (command lookup and argument
 parsing), [session.cpp](src/app/cli/session.cpp) (connect, login),
 [password.cpp](src/app/cli/password.cpp),
+[settings.cpp](src/lib/client/settings.cpp) (config files),
 [token_cache.cpp](src/lib/client/token_cache.cpp),
 [reply.cpp](src/lib/client/reply.cpp) (JSON replies),
 [local_files.cpp](src/lib/client/local_files.cpp) (collecting and hashing files),
@@ -914,11 +953,56 @@ the HTTP client [net/http_client.cpp](src/lib/confide/net/http_client.cpp), whic
 server's forwarder uses too. A separate executable; it shares only `common`
 and `net` with the server.
 
+### 10.1 Global options: config file -> ENV -> command line
+
+`main()` builds `cli::Global` (server, user, ca_file, allow_http) from four
+layers of `client::Settings` ([settings.hpp](src/lib/client/settings.hpp)),
+lowest priority first. Each layer sets some keys (`std::optional`), and
+`overlay(low, high)` replaces the keys `high` sets, with their origin:
+
+```
+main()
+├── po::command_line_parser -> vm           // -s, -u, --ca-file, --config, --allow-http
+├── po::parse_environment   -> env          // FTC_SERVER, FTC_USER, FTC_CA_FILE, FTC_CONFIG
+│     (kept apart from vm, so `ftc config` can tell the two apart)
+├── file_layer(--config or FTC_CONFIG)
+│   ├── set, non-empty -> load_settings_file(path)        // must exist
+│   ├── set, empty     -> no file at all                   // used by the integration tests
+│   └── unset          -> for path in default_settings_files():
+│                           load_settings_file_if_exists(path), overlay in order
+│         POSIX:   FTC_SYSTEM_CONFIG (/etc/ftc/ftc.toml, CMake cache var)
+│                  $XDG_CONFIG_HOME/ftc/ftc.toml (~/.config if unset or relative)
+│         Windows: %PROGRAMDATA%\ftc\ftc.toml, %APPDATA%\ftc\ftc.toml
+│     error (unreadable, bad TOML, wrong type) -> "ftc: <file>: ..." exit 2
+│     warnings (unknown keys, allow_http, password) -> stderr, key ignored
+├── s = overlay(overlay(files, layer(env)), layer(vm))
+└── Global: an empty value from any layer = the default
+      server  -> none ("no server: ..." when a command needs one)
+      user    -> system_user()        // passwd entry of the uid / GetUserNameW
+      ca_file -> nullopt = system CAs
+      allow_http: command line only; FTC_PASSWORD: env only (password.cpp)
+      Global::from (origins) + Global::config_files: for `ftc config`
+```
+
+- `parse_settings()` uses toml11 like the server's config parser, but the
+  client keeps its own copy: `config-static` would pull in server logging.
+  Only top-level `server`, `user` and `ca_file`; a relative `ca_file` is
+  resolved against the file's folder.
+- `ftc config` ([commands/config.cpp](src/app/cli/commands/config.cpp))
+  prints each value with its origin (`--server`, `env FTC_SERVER`, a file
+  path, `default`) and the files read; `--get KEY` prints just the value.
+  No server access. The Nautilus dialogs use `ftc config --get server/user`.
+- Packaging: `confide-client` installs `config/ftc.example.toml` as
+  `/etc/ftc/ftc.toml` (0644, deb conffile, rpm `%config(noreplace)`). Not in
+  `/etc/confide`, which is `0750 root:confide` for the server.
+
+### 10.2 Connecting
+
 ```
 main -> run_command() -> Command::run(global, vm)   // kSend, kGet, ...
-└── connect(global)                                // every command except login/logout
+└── connect(global)                                // every command except login/logout/recent/config
     ├── open_session(global)
-    │   ├── --server / --user (or FTC_SERVER / FTC_USER) required
+    │   ├── server and user required (see 10.1)
     │   ├── ServerUrl::parse(server)               // http[s]://host[:port], port 8080 by default
     │   ├── http:// without --allow-http -> refuse (before any password is asked)
     │   ├── TokenCache::for_server(url, user)
@@ -948,3 +1032,10 @@ HttpClient::<request>
   file even if the server could not be told (warns unless the server said
   401, i.e. the token was already gone).
 - One TCP/TLS connection per request; no keep-alive state in the client.
+- TLS ([http_client.cpp](src/lib/confide/net/http_client.cpp) `create()`,
+  [client_impl.hpp](src/lib/confide/net/client/client_impl.hpp)
+  `exchange_once()`): one `ssl::context(tls_client)` per `HttpClient` with
+  `verify_peer`, loaded from `ca_file` or the system default paths; per
+  connection SNI (`SSL_set_tlsext_host_name`) and
+  `ssl::host_name_verification(url.host)`. No minimum protocol version or
+  cipher list is set: the system OpenSSL policy decides.

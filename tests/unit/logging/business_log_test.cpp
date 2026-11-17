@@ -77,6 +77,23 @@ TEST(BusinessLog, FormatsFullFileEvent) {
             R"("to":"bob","server":"siteB","file":"report/a.csv","size":10240,"sha256":"ab12"})");
 }
 
+TEST(BusinessLog, FormatsForwardFailure) {
+  const auto line = BusinessLog::format({.type = BizEventType::forward_failed,
+                                         .tx = tx_id(),
+                                         .actor = "system",
+                                         .from_user = "alice",
+                                         .to_user = "carol",
+                                         .to_server = "siteB",
+                                         .error = "unknown_destination",
+                                         .detail = "no \"carol\" there"},
+                                        kT);
+  EXPECT_EQ(line,
+            R"({"v":1,"ts":"2026-09-27T12:00:03Z","event":"forward_failed",)"
+            R"("tx":"3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b","actor":"system","from":"alice",)"
+            R"("to":"carol","server":"siteB","error":"unknown_destination",)"
+            R"("detail":"no \"carol\" there"})");
+}
+
 TEST(BusinessLog, OmitsEmptyFields) {
   const auto line = BusinessLog::format({.type = BizEventType::committed,
                                          .tx = tx_id(),

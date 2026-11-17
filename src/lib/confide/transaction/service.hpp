@@ -6,7 +6,9 @@
 #include "transaction/service_types.hpp"
 #include "transaction/transaction.hpp"
 
+#include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -99,6 +101,23 @@ public:
   // which the next commit overwrites.
   Result<Transaction> commit(const Caller& caller, const common::TransactionId& id);
 
+  // Deletes an open transaction of the caller with its files and logs
+  // `discarded`: a send that failed half way, or one made by mistake. Only
+  // the sender, and only while it is open: `conflict` once committed (what
+  // the target may already have seen stays until retention or an admin
+  // removes it), `gone` if expired. An upload in progress fails at its end.
+  Result<void> discard(const Caller& caller, const common::TransactionId& id);
+
+  // Asks for another attempt to forward a committed transaction of the
+  // caller to its target server: after a `failed` push once the cause is
+  // fixed, or to cut a `retrying` wait short. Sets the status to `pending`,
+  // next_attempt_at to now or, if later, retry_min_interval after the last
+  // failed attempt, and calls ServiceOptions::on_retry. Asking again while
+  // it is `pending` changes nothing. Only the sender; `conflict` if the
+  // transaction is not waiting to be forwarded (open, local, delivered),
+  // `gone` if expired.
+  Result<Transaction> retry_forward(const Caller& caller, const common::TransactionId& id);
+
   // --- Reading ------------------------------------------------------------
 
   Result<Transaction> get(const Caller& caller, const common::TransactionId& id) const;
@@ -142,8 +161,18 @@ public:
   // committed yet, already delivered, expired, or local).
   Result<Transaction> outgoing(const common::TransactionId& id) const;
 
-  // committed -> delivered, after the peer confirmed the push.
+  // committed -> delivered, after the peer confirmed the push. Clears
+  // Transaction::forwarding.
   Result<void> mark_delivered(const common::TransactionId& id);
+
+  // Records a failed push in Transaction::forwarding, which the sender
+  // sees (the error code; err.detail only goes to the business log).
+  // `retry_in` set: the forwarder tries again after it (`retrying`);
+  // nullopt: it gave up until a retry or the next start (`failed`, also
+  // logged as `forward_failed`). Does nothing for a transaction that is no
+  // longer waiting to be forwarded (deleted, delivered, expired).
+  Result<void> record_forward_failure(const common::TransactionId& id, const common::Error& err,
+                                      std::optional<std::chrono::milliseconds> retry_in);
 
   // Transactions whose expires_at has passed, in any state.
   std::vector<common::TransactionId> list_expired() const;
@@ -152,16 +181,27 @@ public:
   // `expired`.
   Result<void> expire(const common::TransactionId& id);
 
+  // Number of per-transaction mutexes held, for tests.
+  std::size_t lock_count() const;
+
 private:
   friend class PendingUpload;
 
   // Mutex of one transaction, created on first use.
   std::shared_ptr<std::mutex> lock_for(const common::TransactionId& id);
 
+  // lock_for() of a transaction that exists, `notfound` otherwise. Every call
+  // on an id from a request goes through here: lock_for() alone would keep
+  // a mutex for each id anyone ever asked about, existing or not.
+  Result<std::shared_ptr<std::mutex>> lock_existing(const common::TransactionId& id);
+
   // Marks the transaction expired, deletes it with its files and logs
-  // `type` with `actor`. Shared by expire() and admin_delete().
+  // `type` with `actor`. Shared by expire(), admin_delete() and discard().
+  // `allowed`, if set, is asked under the transaction's lock and its error
+  // ends the call: the state it saw can't change before the delete.
   Result<void> destroy(const common::TransactionId& id, logging::BizEventType type,
-                       const Caller& actor);
+                       const Caller& actor,
+                       const std::function<Result<void>(const Transaction&)>& allowed = {});
 
   TransactionRepository& repo_;
   storage::FileStore& store_;
@@ -169,7 +209,7 @@ private:
   const common::IClock& clock_;
   ServiceOptions options_;
 
-  std::mutex locks_mu_;
+  mutable std::mutex locks_mu_;
   std::unordered_map<common::TransactionId, std::shared_ptr<std::mutex>> locks_;
 };
 
