@@ -9,6 +9,7 @@ Each section is a checklist followed by a worked example.
 
 - [1. Add a command to the `ftc` client](#1-add-a-command-to-the-ftc-client)
 - [2. Add a REST endpoint to the server](#2-add-a-rest-endpoint-to-the-server)
+- [3. Add a client setting (config file / ENV / option)](#3-add-a-client-setting-config-file--env--option)
 
 ---
 
@@ -17,7 +18,9 @@ Each section is a checklist followed by a worked example.
 ### How a command runs
 
 ```
-main.cpp        global options (--server, --user, --ca-file, --allow-http, env FTC_*)
+main.cpp        global options -> cli::Global
+   │              config files < env FTC_* < --server/--user/--ca-file (see §3)
+   │              a broken config file           -> "ftc: <file>: ...", exit 2
    │
 dispatch.cpp    run_command(name, args, global)
    │              find(name) in kAll           -> unknown name: usage, exit 2
@@ -84,7 +87,13 @@ first: see [2. Add a REST endpoint to the server](#2-add-a-rest-endpoint-to-the-
 - **Use `connect(global)`** for anything that needs a logged-in client. It
   loads the saved token, logs in if there is none, and logs in again when
   the token expires. Use `open_session(global)` only for commands that manage
-  the token themselves (`login`, `logout`).
+  the token themselves (`login`, `logout`). A command that needs no server
+  (`recent`, `config`) calls neither, so it works offline and never asks for
+  a password.
+- **Use `Global` as it is.** `main.cpp` has already merged the config files,
+  the environment and the command line into `global.server`, `global.user`
+  and `global.ca_file`. Don't read `FTC_*` variables or config files in a
+  command. If a command needs a new shared setting, add it as in §3.
 - **Don't trust server replies.** Read fields with `str()` / `num()` from
   [reply.hpp](src/lib/client/reply.hpp) (a missing field gives `""` / `0`), and
   pass server paths through `common::RelativePath::parse` before using
@@ -166,10 +175,12 @@ help text in `kCommands`, keeping the column alignment:
 **4. [src/app/cli/CMakeLists.txt](src/app/cli/CMakeLists.txt):**
 `commands/compose.cpp` in `target_sources` (once for the whole file).
 
-**5. Build and try it:**
+**5. Build and try it.** Run with `FTC_CONFIG=` so your own
+`~/.config/ftc/ftc.toml` or `/etc/ftc/ftc.toml` doesn't change the result:
 
 ```sh
 cmake --build build --target ftc
+export FTC_CONFIG=               # no config file while trying things out
 build/bin/ftc rm --help          # usage line comes from .synopsis
 build/bin/ftc rm                 # "the option '--id' is required but missing", exit 2
 ```
@@ -403,3 +414,94 @@ ctest --test-dir build --output-on-failure
 
 **7. Docs:** a row in README §4, Architecture §8 and implementation_details
 §3; the call tree in implementation_details §5.3; CHANGELOG entry.
+
+---
+
+## 3. Add a client setting (config file / ENV / option)
+
+### How settings are merged
+
+`ftc` takes each global setting from the first layer that has it (see
+[implementation_details.md](implementation_details.md) §10.1):
+
+```
+command line  -s / -u / --ca-file                       highest
+environment   FTC_SERVER / FTC_USER / FTC_CA_FILE
+user file     ~/.config/ftc/ftc.toml   ($XDG_CONFIG_HOME)
+system file   /etc/ftc/ftc.toml        (FTC_SYSTEM_CONFIG, installed by confide-client)
+default       none / OS user / system CAs                  lowest
+```
+
+Each layer is a `client::Settings`
+([settings.hpp](src/lib/client/settings.hpp)): one `std::optional` per key
+(nullopt = this layer doesn't set it) plus `from`, where each value came from.
+`overlay(low, high)` replaces whatever `high` sets. An empty value is set,
+and after merging it means "the default", so a user can cancel what the
+system file sets.
+
+### First decide where the setting may come from
+
+- **Secrets never go in a file.** Passwords and tokens: environment
+  (development only) or prompt, as `FTC_PASSWORD`. If someone puts one in a
+  file, `parse_settings()` warns and ignores it.
+- **Settings that make ftc less secure** go on the command line only, as
+  `--allow-http`, so a shared `/etc/ftc/ftc.toml` can't turn them on for
+  every user without anyone noticing. They are ignored with a warning in a file.
+- **Everything else** (where to connect, as whom, which CA, timeouts, ...)
+  goes in all three layers.
+
+### Checklist (a setting in all three layers)
+
+| # | Where | What |
+|---|-------|------|
+| 1 | [client/settings.hpp](src/lib/client/settings.hpp) | A field in `Settings` and in `Settings::Origins`; the key in the file comment at the top. |
+| 2 | [client/settings.cpp](src/lib/client/settings.cpp) | Read it in `parse_settings()` (with a type check that names the file), skip it in the unknown-key loop, and copy it in `overlay()`. A path is resolved against `base_dir`, like `ca_file`. |
+| 3 | [main.cpp](src/app/cli/main.cpp) | The option in `global.add_options()` (help text naming the env variable), the env name in `env_option()`, the CLI/env names in `kFromCli` / `kFromEnv`, the field in `layer()`, and its default when building `cli::Global`. |
+| 4 | [cli.hpp](src/app/cli/cli.hpp) | The field in `cli::Global`. |
+| 5 | [commands/config.cpp](src/app/cli/commands/config.cpp) | The key in `kKeys` and `entry()`, so `ftc config` shows it with its origin. |
+| 6 | [config/ftc.example.toml](config/ftc.example.toml) | The key, commented out, with its default. This file is installed as `/etc/ftc/ftc.toml`. |
+| 7 | [tests/unit/client/settings_test.cpp](tests/unit/client/settings_test.cpp) | Parsing (good value, wrong type) and `overlay()`. |
+| 8 | [tests/integration/two_sites.sh](tests/integration/two_sites.sh) step 8 | Only if it changes what ftc does on the network: from the file alone, and overridden by env and option. |
+| 9 | [README.md](README.md) "Client configuration" | A row in the priority table. |
+| 10 | [implementation_details.md](implementation_details.md) §10.1 | The default, if it is not obvious. |
+| 11 | [CHANGELOG.md](CHANGELOG.md) | An entry under `[Unreleased]` → Business logic → Added. |
+
+Options that belong to one command (`--retention`, `--force`) are not global
+settings: they stay in that command's `options` function (§1) and don't go
+in the file.
+
+### Keeping tests and scripts away from the machine's config
+
+Any script that runs ftc (tests, benchmarks, desktop dialogs that must behave
+the same everywhere) should decide which config ftc reads:
+
+- `FTC_CONFIG=` reads no config file at all. `ftc_as` in
+  [tests/integration/lib.sh](tests/integration/lib.sh), `ftc_ldap` and
+  [tests/bench/bench.sh](tests/bench/bench.sh) do this; a new wrapper must too,
+  or a developer's `/etc/ftc/ftc.toml` (or a broken one) breaks the test.
+- `FTC_CONFIG=path` reads only that file (it must exist).
+- `XDG_STATE_HOME=$WORK/ftc-state` keeps tokens and recent recipients out of
+  your home folder, as the wrappers already do.
+- A script that needs to know the server or user asks
+  `ftc config --get server` (as the Nautilus dialogs do) instead of reading
+  `FTC_SERVER` itself, which would miss the config files.
+
+### Packaging
+
+`/etc/ftc/ftc.toml` belongs to the `client` CPack component
+([CMakeLists.txt](CMakeLists.txt)). It is a conffile in the `.deb`
+([packaging/deb/client/conffiles](packaging/deb/client/conffiles)) and
+`%config(noreplace)` 0644 in the `.rpm` (`CPACK_RPM_CLIENT_USER_FILELIST`).
+That is why an admin's edits survive upgrades. The release workflow checks
+the mode and the config mark on EL8/EL9. To move it elsewhere, set
+`-DFTC_CONFIG_DIR=...`; `FTC_SYSTEM_CONFIG` (compiled into ftc) follows. Keep
+the client file out of `/etc/confide`: that folder is `0750 root:confide`,
+so ordinary users can't read it.
+
+Check a local package build:
+
+```sh
+cd build && cpack -G DEB
+dpkg-deb -c confide-client_*.deb | grep ftc.toml         # -rw-r--r-- ./etc/ftc/ftc.toml
+dpkg-deb --ctrl-tarfile confide-client_*.deb | tar -xO ./conffiles
+```
