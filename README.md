@@ -185,6 +185,7 @@ Everything else has a default. Unknown keys give a warning in the technical log.
 | `rest.blocking_threads` | `0` | threads for disk writes/reads and password checks (LDAP), so a slow disk or directory doesn't stall the network threads; about the number of uploads/downloads you expect at once. `0` = 2 × CPU cores, at least 4 |
 | `rest.request_timeout_ms` | `30000` | request timeout |
 | `rest.max_upload_bytes` | `0` | largest single file a client (or peer) may upload, in bytes; a larger one is refused with 400 before any of it is read. `0` = no limit: any user can then fill the disk |
+| `rest.trusted_proxies` | `[]` | reverse proxies (IPs or CIDR blocks, `["10.0.0.5", "fd00::/8"]`) whose `X-Forwarded-For` names the client, for login throttling and logs. Empty = the header is ignored. See [Behind a reverse proxy](#behind-a-reverse-proxy) |
 | `tls.enabled` | `true` | HTTPS on/off. `false` sends passwords and files in clear text: local testing only |
 | `tls.cert`, `tls.key` | — | PEM certificate and key, required when TLS is on |
 | `tls.ca` | system CAs | CA bundle to verify peer servers |
@@ -337,6 +338,18 @@ from one address, 50 for one user), the server stops checking passwords for that
 for 30 s, doubling up to 15 min; with LDAP this keeps the server from being used to run
 accounts into the directory's own lockout.
 
+### Behind a reverse proxy
+
+Behind a proxy every request comes from the proxy's address, so the per-address limit
+above (20 wrong passwords) would block all users at once. List the proxy in
+`rest.trusted_proxies` and have it set `X-Forwarded-For` (nginx:
+`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`). The header is read
+only on connections from a listed proxy. Its entries are taken right to left, skipping
+listed proxies, and the first other address is the client. Entries further left were
+written by the client and are ignored. A listed proxy that sends no header (health
+check) counts as the client itself; the server logs this once. Only list proxies you
+run, and make the server's port reachable through them only.
+
 ### Full flow with curl
 
 alice sends a file to bob on the same server:
@@ -374,7 +387,8 @@ Use `--data-binary` (not `-d`) for uploads, so curl does not change the file.
 with its SHA-256 and commits. `ftc get` downloads all files of a transaction and checks
 each SHA-256 before it keeps the file.
 
-The server comes from `-s` / `FTC_SERVER`, the user from `-u` / `FTC_USER`. The first
+The server comes from `-s` / `FTC_SERVER`, the user from `-u` / `FTC_USER`, or from a
+config file (see [Client configuration](#client-configuration) below). The first
 command (or `ftc login`) asks for the password on the terminal without echo, trades it
 for a token and saves the token in
 `$XDG_STATE_HOME/ftc/tokens/<user>@<host>_<port>` (default `~/.local/state/...`, folder
@@ -443,6 +457,39 @@ Notes:
 - `add` replaces a file already in the transaction under the same path. `add` and `rm` only
   work while the transaction is `open`; after `commit` they fail with `conflict`.
 - With TLS, use an `https://` URL and `--ca-file cert.pem` (or `FTC_CA_FILE`) for a self-signed certificate.
+
+### Client configuration
+
+ftc takes the server, the user and the CA bundle from the first of these that has the setting:
+
+| Priority | Source | Server | User | CA bundle |
+|---|---|---|---|---|
+| 1 | command line | `-s URL` | `-u NAME` | `--ca-file PATH` |
+| 2 | environment | `FTC_SERVER` | `FTC_USER` | `FTC_CA_FILE` |
+| 3 | user config | `server` | `user` | `ca_file` in `~/.config/ftc/ftc.toml` (`$XDG_CONFIG_HOME/ftc/ftc.toml`) |
+| 4 | system config | `server` | `user` | `ca_file` in `/etc/ftc/ftc.toml` |
+| — | default | none | your OS login name | system CAs |
+
+Every config file is optional, and each one may set only some of the keys:
+
+```toml
+# /etc/ftc/ftc.toml, installed (all commented out) by the confide-client package
+server = "https://ftc.example.org:8443"
+ca_file = "/etc/ftc/ca.pem"     # a relative path is relative to this file's folder
+```
+
+- An empty value at a higher level (`FTC_CA_FILE=`, `ca_file = ""`) brings back the default.
+- `--config PATH` / `FTC_CONFIG=PATH` reads only that file instead of the user and system files
+  (it must exist); `FTC_CONFIG=` reads none.
+- A file that can't be read or isn't valid TOML stops ftc (exit code 2) with a message naming the
+  file. Unknown keys are ignored with a warning.
+- The password is never read from a file. `--allow-http` is command line only, so a config
+  file can't quietly turn off TLS.
+- `ftc config` shows the values in use and where each comes from; `ftc config --get server`
+  prints one value, for scripts.
+- On Windows the files are `%PROGRAMDATA%\ftc\ftc.toml` and `%APPDATA%\ftc\ftc.toml`.
+- The package keeps `/etc/ftc/ftc.toml` on upgrade once you edit it (a deb conffile,
+  `%config(noreplace)` in the rpm).
 
 ### Administration
 
