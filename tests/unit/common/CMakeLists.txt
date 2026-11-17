@@ -3,6 +3,7 @@ confide_add_unit_tests(common_tests
     base64_test.cpp
     error_test.cpp
     id_test.cpp
+    ip_network_test.cpp
     path_sanitizer_test.cpp
     sha256_test.cpp
     time_test.cpp

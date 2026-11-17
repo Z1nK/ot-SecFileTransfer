@@ -3,6 +3,7 @@ set(LOCAL_LIB_NAME common)
 add_library(${LOCAL_LIB_NAME} STATIC
   base64.cpp
   id.cpp
+  ip_network.cpp
   path_sanitizer.cpp
   sha256.cpp
   time.cpp
@@ -17,7 +18,7 @@ target_include_directories(${LOCAL_LIB_NAME} PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/..>
   )
 
-# Boost.Uuid is header-only -> id.cpp. OpenSSL libcrypto -> sha256.cpp.
+# Boost.Uuid is header-only -> id.cpp; Boost.Asio ip::address -> ip_network.cpp. OpenSSL libcrypto -> sha256.cpp.
 target_link_libraries(${LOCAL_LIB_NAME} PRIVATE
   Boost::headers
   OpenSSL::Crypto
