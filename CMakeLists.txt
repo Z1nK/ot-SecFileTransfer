@@ -23,6 +23,13 @@ set(CMAKE_MODULE_PATH ${CMAKE_CURRENT_LIST_DIR}/cmake/modules)
 set(CMAKE_CONFIG_PATH ${CMAKE_CURRENT_LIST_DIR}/cmake/configs)
 include(configuration)
 
+# ftc's system-wide config file: compiled into ftc (src/lib/client) and
+# installed by confide-client. Absolute for the same reason as
+# CONFIDE_CONFIG_DIR below. Not in /etc/confide, which only the server's
+# group may read.
+set(FTC_CONFIG_DIR "/etc/ftc" CACHE STRING "Where the ftc system config is installed")
+set(FTC_SYSTEM_CONFIG "${FTC_CONFIG_DIR}/ftc.toml" CACHE STRING "System config file ftc reads")
+
 add_subdirectory(src)
 
 if(WITH_GOOGLE_TEST)
