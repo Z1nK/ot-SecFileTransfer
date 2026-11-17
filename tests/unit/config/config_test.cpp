@@ -7,6 +7,7 @@
 #include <fstream>
 #include <string>
 #include <string_view>
+#include <vector>
 
 using confide::common::ErrCode;
 using confide::config::ConfigLoader;
@@ -157,6 +158,31 @@ TEST(ConfigLoader, TypeAndRangeErrors) {
   expect_invalid(with("[retention]\ndefault_days = 40\nmax_days = 30\n"), "retention.max_days");
   expect_invalid(with("[retention]\ndefault_days = 0\n"), "retention.default_days");
   expect_invalid("instance_name = \"a\"\nstorage = 5\n", "storage: expected a table");
+}
+
+TEST(ConfigLoader, TrustedProxies) {
+  auto cfg = ConfigLoader::from_string(kMinimal);
+  ASSERT_TRUE(cfg.has_value()) << cfg.error().detail;
+  EXPECT_TRUE(cfg->rest().trusted_proxies.empty());  // default: header never believed
+
+  cfg = ConfigLoader::from_string(
+      with("[rest]\ntrusted_proxies = [\"10.0.0.5\", \"172.16.0.0/12\", \"fd00::/8\"]\n"));
+  ASSERT_TRUE(cfg.has_value()) << cfg.error().detail;
+  EXPECT_EQ(cfg->rest().trusted_proxies,
+            (std::vector<std::string>{"10.0.0.5", "172.16.0.0/12", "fd00::/8"}));
+  for (const auto& w : cfg->warnings()) {
+    EXPECT_EQ(w.find("trusted_proxies"), std::string::npos) << w;  // a known key
+  }
+}
+
+TEST(ConfigLoader, TrustedProxiesRules) {
+  expect_invalid(with("[rest]\ntrusted_proxies = \"10.0.0.5\"\n"),
+                 "rest.trusted_proxies: expected an array");
+  expect_invalid(with("[rest]\ntrusted_proxies = [5]\n"), "rest.trusted_proxies[0]: expected a string");
+  expect_invalid(with("[rest]\ntrusted_proxies = [\"10.0.0.5\", \"proxy.example\"]\n"),
+                 "rest.trusted_proxies[1]: 'proxy.example'");
+  expect_invalid(with("[rest]\ntrusted_proxies = [\"10.0.0.0/33\"]\n"), "rest.trusted_proxies[0]");
+  expect_invalid(with("[rest]\ntrusted_proxies = [\"10.1.2.3/8\"]\n"), "host bits");
 }
 
 TEST(ConfigLoader, InvalidNames) {

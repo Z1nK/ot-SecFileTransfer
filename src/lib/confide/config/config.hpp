@@ -33,6 +33,10 @@ struct RestCfg {
   uint32_t blocking_threads = 0;  // 0 = 2 * hardware_concurrency, at least 4
   uint32_t request_timeout_ms = 30'000;
   uint64_t max_upload_bytes = 0;  // largest request body (one file); 0 = no limit
+  // Reverse proxies (IPs or CIDR blocks) whose X-Forwarded-For is believed;
+  // validated by common::IpNetworks::parse. Empty = the header is ignored and
+  // the socket's address is the client.
+  std::vector<std::string> trusted_proxies{};
 };
 
 // On by default. Same cert/key serve the API and outgoing forwards.
