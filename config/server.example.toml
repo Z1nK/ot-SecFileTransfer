@@ -12,6 +12,12 @@ threads = 0                      # 0 = number of cores
 blocking_threads = 0             # disk I/O and LDAP checks; 0 = 2 x cores, at least 4
 request_timeout_ms = 30000
 # max_upload_bytes = 0           # largest single file a client may upload; 0 = no limit
+# Behind a reverse proxy (nginx, Apache, HAProxy in HTTP mode), list the
+# proxies here so failed logins are counted per real client, not per proxy.
+# X-Forwarded-For is believed only from these addresses; list only proxies
+# you run, and firewall this port so clients can't skip the proxy.
+# nginx: proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+# trusted_proxies = ["10.0.0.5", "fd00:1::/64"]   # IPs or CIDR blocks; default none
 
 [tls]
 enabled = true                   # set false for local testing only

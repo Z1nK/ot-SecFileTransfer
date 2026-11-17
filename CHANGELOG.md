@@ -23,6 +23,7 @@ Each release is split into two parts:
 - **`ftc retry ID` / `POST /transactions/{id}/retry`** ask for another attempt to forward a committed transaction: after `failed` once the cause is fixed, or to skip the wait while `retrying`. The attempt comes no sooner than 5 s after the last failed one, however often it is asked for. Only the sender; 409 for a local or already delivered transaction.
 - **Failed forwards are in the business log.** When the forwarder gives up on a push (unknown user on the peer, wrong peer token, ...), it logs `forward_failed` with the transaction, the target and the reason (`error`, `detail`). Until now the business log only showed such a transaction as `committed`.
 - **The receiving server logs refused pushes.** A bad peer token, and any request a peer makes on `/internal/*` that is refused with a 4xx, now give a warning in its technical log; before, they showed up only in the sending server's log.
+- **`rest.trusted_proxies`: running behind a reverse proxy.** Behind a proxy all requests came from the proxy's address, so 20 wrong passwords from any users blocked everybody for up to 15 min. Listed proxies (IPs or CIDR blocks) may now name the client in `X-Forwarded-For`; login throttling and the technical log use that address. The header is ignored from anyone else, and entries the client wrote itself are skipped. A listed proxy that sends no header counts as the client and is logged once. Default: empty, the header is never read.
 - **`origin_server` in transaction JSON.** Users now see which server a received transaction came from (it was admin-only), and `ftc inbox` shows the sender as `alice@siteA` for those: `alice` alone could not be told from the alice of one's own server.
 
 #### Changed
@@ -45,6 +46,7 @@ Each release is split into two parts:
 - Packaging: new CPack component `nautilus` → `confide-client-nautilus` (Linux only). The release workflow collects the `noarch` RPM too, installs the other packages first and checks that no integration files or zenity come with them, then installs `confide-client-nautilus` on top.
 - `transaction::DestinationCheck` returns the target name to store; `auth::IUserDirectory` has `canonical_user()`; `is_valid_name` moved to `common/name.hpp` so `transaction` can use it without `config`.
 - `TransactionService::lock_existing()` replaces `lock_for()` wherever the id comes from a request.
+- New `common/ip_network.hpp`: `canonical_ip()`, `IpNetworks` (IP/CIDR set) and `client_address()`. `ServerOptions::trusted_proxies`, parsed by `HttpServer::start()`. The client address is now always in canonical form, so an IPv4-mapped peer (`::ffff:192.0.2.1` on a dual-stack bind) is logged and throttled as `192.0.2.1`.
 
 ## [0.7.6] — 2026-11-10
 

@@ -185,6 +185,7 @@ Everything else has a default. Unknown keys give a warning in the technical log.
 | `rest.blocking_threads` | `0` | threads for disk writes/reads and password checks (LDAP), so a slow disk or directory doesn't stall the network threads; about the number of uploads/downloads you expect at once. `0` = 2 × CPU cores, at least 4 |
 | `rest.request_timeout_ms` | `30000` | request timeout |
 | `rest.max_upload_bytes` | `0` | largest single file a client (or peer) may upload, in bytes; a larger one is refused with 400 before any of it is read. `0` = no limit: any user can then fill the disk |
+| `rest.trusted_proxies` | `[]` | reverse proxies (IPs or CIDR blocks, `["10.0.0.5", "fd00::/8"]`) whose `X-Forwarded-For` names the client, for login throttling and logs. Empty = the header is ignored. See [Behind a reverse proxy](#behind-a-reverse-proxy) |
 | `tls.enabled` | `true` | HTTPS on/off. `false` sends passwords and files in clear text: local testing only |
 | `tls.cert`, `tls.key` | — | PEM certificate and key, required when TLS is on |
 | `tls.ca` | system CAs | CA bundle to verify peer servers |
@@ -336,6 +337,18 @@ restart logs everybody out. After 5 wrong passwords for one user from one addres
 from one address, 50 for one user), the server stops checking passwords for that key
 for 30 s, doubling up to 15 min; with LDAP this keeps the server from being used to run
 accounts into the directory's own lockout.
+
+### Behind a reverse proxy
+
+Behind a proxy every request comes from the proxy's address, so the per-address limit
+above (20 wrong passwords) would block all users at once. List the proxy in
+`rest.trusted_proxies` and have it set `X-Forwarded-For` (nginx:
+`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`). The header is read
+only on connections from a listed proxy. Its entries are taken right to left, skipping
+listed proxies, and the first other address is the client. Entries further left were
+written by the client and are ignored. A listed proxy that sends no header (health
+check) counts as the client itself; the server logs this once. Only list proxies you
+run, and make the server's port reachable through them only.
 
 ### Full flow with curl
 

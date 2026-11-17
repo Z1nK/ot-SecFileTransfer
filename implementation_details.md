@@ -420,7 +420,9 @@ Impl::dispatch(ex)
 │   └── nothing matched                        -> Error notfound -> 404
 ├── on error: ex.send(Response::error(...)), return
 │
-├── source = ex.remote_address()             // client IP, for the LoginLimiter
+├── source = client_address(req, ex.remote_address())   // done in serve_requests()
+│     // canonical IP; via X-Forwarded-For only when the socket peer is in
+│     // rest.trusted_proxies (common::client_address, rightmost untrusted hop)
 ├── switch route.access:                     // all inside offload(blocking, ...)
 │     peer     -> auth.authenticate_peer(req)
 │     password -> auth.authenticate_password(req, source)
