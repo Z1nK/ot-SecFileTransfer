@@ -342,6 +342,56 @@ TEST_F(ServerTest, LoginNeedsThePassword) {
   EXPECT_EQ(auth_.last_source(), "127.0.0.1");
 }
 
+TEST_F(ServerTest, ForwardedForIgnoredWithoutTrustedProxies) {
+  auto stream = connect();
+  http::request<http::string_body> req{http::verb::post, "/auth/token", 11};
+  req.set(http::field::authorization, "Basic good");
+  req.set("X-Forwarded-For", "203.0.113.7");
+  EXPECT_EQ(roundtrip(stream, std::move(req)).result(), http::status::ok);
+  EXPECT_EQ(auth_.last_source(), "127.0.0.1");
+}
+
+TEST_F(ServerTest, TrustedProxyForwardsTheClientAddress) {
+  server_.reset();
+  server_ = std::make_unique<HttpServer>(
+      ServerOptions{.bind = "127.0.0.1", .port = 0, .threads = 2,
+                    .trusted_proxies = {"127.0.0.0/8"}},
+      router_, auth_, *tlog_);
+  ASSERT_TRUE(server_->start());
+
+  const auto login_via_proxy = [&](std::vector<std::string> forwarded_for) {
+    auto stream = connect();
+    http::request<http::string_body> req{http::verb::post, "/auth/token", 11};
+    req.set(http::field::authorization, "Basic bad");
+    for (auto& line : forwarded_for) {
+      req.insert("X-Forwarded-For", line);
+    }
+    EXPECT_EQ(roundtrip(stream, std::move(req)).result(), http::status::unauthorized);
+    return auth_.last_source();
+  };
+
+  EXPECT_EQ(login_via_proxy({"203.0.113.7"}), "203.0.113.7");
+  // Spoofed entry from the client is left of the one our proxy appended.
+  EXPECT_EQ(login_via_proxy({"6.6.6.6, 203.0.113.7"}), "203.0.113.7");
+  // Repeated header lines are one list, in order.
+  EXPECT_EQ(login_via_proxy({"6.6.6.6", "203.0.113.8"}), "203.0.113.8");
+  // No header from the proxy: the proxy itself is the client.
+  EXPECT_EQ(login_via_proxy({}), "127.0.0.1");
+}
+
+TEST(ServerStart, BadTrustedProxyFails) {
+  Router router;
+  FakeAuth auth;
+  confide::logging::TechLog tlog{std::make_unique<NullSink>()};
+  HttpServer server{
+      ServerOptions{.bind = "127.0.0.1", .port = 0, .trusted_proxies = {"proxy.example"}},
+      router, auth, tlog};
+  auto started = server.start();
+  ASSERT_FALSE(started.has_value());
+  EXPECT_EQ(started.error().code, ErrCode::validation);
+  EXPECT_NE(started.error().detail.find("proxy.example"), std::string::npos);
+}
+
 TEST_F(ServerTest, ThrottledLoginIs429) {
   auto res = call(http::verb::post, "/auth/token", {}, "Basic slow");
   EXPECT_EQ(res.result(), http::status::too_many_requests);

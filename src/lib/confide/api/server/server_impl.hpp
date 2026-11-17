@@ -1,6 +1,7 @@
 #pragma once
 // Internal to HttpServer: the state behind HttpServer::Impl.
 #include "api/server.hpp"
+#include "common/ip_network.hpp"
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
@@ -48,6 +49,10 @@ struct HttpServer::Impl {
   // `source` (client IP) and runs the handler.
   asio::awaitable<void> dispatch(Exchange& ex, const std::string& source);
 
+  // serve.cpp: the client address for `req` arriving from socket address
+  // `peer`, following X-Forwarded-For through `trusted_proxies`.
+  std::string client_address(const RequestHeader& req, const std::string& peer);
+
   // connections.cpp
   // Registers a connection for stop(). nullptr if the server is stopping:
   // the caller must then close the connection itself.
@@ -69,6 +74,11 @@ struct HttpServer::Impl {
 
   std::optional<tcp::acceptor> acceptor;
   std::atomic<std::uint16_t> port{0};
+  // options.trusted_proxies, parsed by start(); read-only afterwards.
+  common::IpNetworks trusted_proxies;
+  // A trusted proxy sent a request without X-Forwarded-For: logged once,
+  // since a misconfigured proxy would otherwise log every request.
+  std::atomic<bool> warned_missing_forwarded_for{false};
 
   std::mutex mu;  // guards everything below
   bool started = false;

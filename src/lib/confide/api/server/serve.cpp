@@ -119,11 +119,33 @@ asio::awaitable<void> HttpServer::Impl::serve_requests(Stream& stream) {
     }
 
     detail::SessionExchange<Stream> ex{stream, buffer, parser, options, blocking->get_executor()};
-    co_await dispatch(ex, ex.remote_address());
+    co_await dispatch(ex, client_address(ex.request(), ex.remote_address()));
     if (ex.must_close()) {
       co_return;
     }
   }
+}
+
+std::string HttpServer::Impl::client_address(const RequestHeader& req, const std::string& peer) {
+  if (trusted_proxies.empty()) {
+    return common::client_address(peer, {}, trusted_proxies);  // canonical peer text
+  }
+  // Several header lines are one list, in order (RFC 9110 §5.3).
+  std::string forwarded_for;
+  for (auto [it, end] = req.equal_range("X-Forwarded-For"); it != end; ++it) {
+    if (!forwarded_for.empty()) {
+      forwarded_for += ',';
+    }
+    forwarded_for += detail::sv(it->value());
+  }
+  if (forwarded_for.empty() && trusted_proxies.contains(peer)
+      && !warned_missing_forwarded_for.exchange(true)) {
+    tlog.warn(kTag,
+              "request from trusted proxy {} without X-Forwarded-For; it counts as the client "
+              "(health check, or the proxy does not set the header). Logged once.",
+              peer);
+  }
+  return common::client_address(peer, forwarded_for, trusted_proxies);
 }
 
 }  // namespace confide::api
