@@ -44,6 +44,12 @@ Result<void> HttpServer::start() {
     }
   }
 
+  auto trusted = common::IpNetworks::parse(s.options.trusted_proxies);
+  if (!trusted) {
+    return fail(ErrCode::validation, "trusted proxy " + trusted.error().detail);
+  }
+  s.trusted_proxies = std::move(*trusted);
+
   // bind is an IP literal or a host name; a name is resolved once, here, and
   // the first address of a configured family is used.
   boost::system::error_code ec;
@@ -109,6 +115,13 @@ Result<void> HttpServer::start() {
 
   s.tlog.info(kTag, "listening on {}:{} ({}, {} threads, {} blocking threads)", shown,
               s.port.load(), s.options.tls ? "https" : "http", count, blocking_count);
+  if (!s.trusted_proxies.empty()) {
+    std::string list;
+    for (const auto& p : s.options.trusted_proxies) {
+      list += (list.empty() ? "" : ", ") + p;
+    }
+    s.tlog.info(kTag, "client address taken from X-Forwarded-For when sent by: {}", list);
+  }
   return {};
 }
 

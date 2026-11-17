@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace confide::api {
 
@@ -21,12 +22,16 @@ struct ServerOptions {
   std::chrono::milliseconds request_timeout{30'000};  // idle time while reading or writing
   std::uint64_t max_upload_bytes = 0;   // 0 = no limit
   std::uint32_t max_header_bytes = 16 * 1024;
+  // Reverse proxies (IPs or CIDR blocks) whose X-Forwarded-For names the
+  // client; see common::client_address(). Empty = header ignored. start()
+  // fails with `validation` on a bad entry.
+  std::vector<std::string> trusted_proxies{};
 
   // nullptr = plain HTTP. Shared with nothing else; built by make_tls_context().
   std::shared_ptr<asio::ssl::context> tls{};
 
-  // bind, port, threads, blocking_threads, timeout and max_upload_bytes from
-  // [rest]; TLS from
+  // bind, port, threads, blocking_threads, timeout, max_upload_bytes and
+  // trusted_proxies from [rest]; TLS from
   // [tls] when enabled.
   // `io` if the certificate or key can't be loaded.
   static Result<ServerOptions> from_config(const config::Config& cfg);
