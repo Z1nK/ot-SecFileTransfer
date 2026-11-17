@@ -191,7 +191,7 @@ External libraries, per target:
 | `api` | Boost (Asio, Beast), OpenSSL::SSL, Threads | Boost.JSON |
 | `net` | Boost (headers) | Boost.JSON, OpenSSL::SSL, Threads |
 | `forwarder` | | Boost.JSON |
-| `client` | Boost (headers), Boost.JSON | |
+| `client` | Boost (headers), Boost.JSON | toml11 (config files) |
 | `ftc` | | Boost.JSON, Boost.ProgramOptions, OpenSSL::SSL, Threads |
 
 ### Error model
@@ -943,6 +943,7 @@ main: signal_io.run() returns -> server.wait() joins all threads
 [dispatch.cpp](src/app/cli/dispatch.cpp) (command lookup and argument
 parsing), [session.cpp](src/app/cli/session.cpp) (connect, login),
 [password.cpp](src/app/cli/password.cpp),
+[settings.cpp](src/lib/client/settings.cpp) (config files),
 [token_cache.cpp](src/lib/client/token_cache.cpp),
 [reply.cpp](src/lib/client/reply.cpp) (JSON replies),
 [local_files.cpp](src/lib/client/local_files.cpp) (collecting and hashing files),
@@ -952,11 +953,56 @@ the HTTP client [net/http_client.cpp](src/lib/confide/net/http_client.cpp), whic
 server's forwarder uses too. A separate executable; it shares only `common`
 and `net` with the server.
 
+### 10.1 Global options: config file -> ENV -> command line
+
+`main()` builds `cli::Global` (server, user, ca_file, allow_http) from four
+layers of `client::Settings` ([settings.hpp](src/lib/client/settings.hpp)),
+lowest priority first. Each layer sets some keys (`std::optional`), and
+`overlay(low, high)` replaces the keys `high` sets, with their origin:
+
+```
+main()
+├── po::command_line_parser -> vm           // -s, -u, --ca-file, --config, --allow-http
+├── po::parse_environment   -> env          // FTC_SERVER, FTC_USER, FTC_CA_FILE, FTC_CONFIG
+│     (kept apart from vm, so `ftc config` can tell the two apart)
+├── file_layer(--config or FTC_CONFIG)
+│   ├── set, non-empty -> load_settings_file(path)        // must exist
+│   ├── set, empty     -> no file at all                   // used by the integration tests
+│   └── unset          -> for path in default_settings_files():
+│                           load_settings_file_if_exists(path), overlay in order
+│         POSIX:   FTC_SYSTEM_CONFIG (/etc/ftc/ftc.toml, CMake cache var)
+│                  $XDG_CONFIG_HOME/ftc/ftc.toml (~/.config if unset or relative)
+│         Windows: %PROGRAMDATA%\ftc\ftc.toml, %APPDATA%\ftc\ftc.toml
+│     error (unreadable, bad TOML, wrong type) -> "ftc: <file>: ..." exit 2
+│     warnings (unknown keys, allow_http, password) -> stderr, key ignored
+├── s = overlay(overlay(files, layer(env)), layer(vm))
+└── Global: an empty value from any layer = the default
+      server  -> none ("no server: ..." when a command needs one)
+      user    -> system_user()        // passwd entry of the uid / GetUserNameW
+      ca_file -> nullopt = system CAs
+      allow_http: command line only; FTC_PASSWORD: env only (password.cpp)
+      Global::from (origins) + Global::config_files: for `ftc config`
+```
+
+- `parse_settings()` uses toml11 like the server's config parser, but the
+  client keeps its own copy: `config-static` would pull in server logging.
+  Only top-level `server`, `user` and `ca_file`; a relative `ca_file` is
+  resolved against the file's folder.
+- `ftc config` ([commands/config.cpp](src/app/cli/commands/config.cpp))
+  prints each value with its origin (`--server`, `env FTC_SERVER`, a file
+  path, `default`) and the files read; `--get KEY` prints just the value.
+  No server access. The Nautilus dialogs use `ftc config --get server/user`.
+- Packaging: `confide-client` installs `config/ftc.example.toml` as
+  `/etc/ftc/ftc.toml` (0644, deb conffile, rpm `%config(noreplace)`). Not in
+  `/etc/confide`, which is `0750 root:confide` for the server.
+
+### 10.2 Connecting
+
 ```
 main -> run_command() -> Command::run(global, vm)   // kSend, kGet, ...
-└── connect(global)                                // every command except login/logout
+└── connect(global)                                // every command except login/logout/recent/config
     ├── open_session(global)
-    │   ├── --server / --user (or FTC_SERVER / FTC_USER) required
+    │   ├── server and user required (see 10.1)
     │   ├── ServerUrl::parse(server)               // http[s]://host[:port], port 8080 by default
     │   ├── http:// without --allow-http -> refuse (before any password is asked)
     │   ├── TokenCache::for_server(url, user)
@@ -986,3 +1032,10 @@ HttpClient::<request>
   file even if the server could not be told (warns unless the server said
   401, i.e. the token was already gone).
 - One TCP/TLS connection per request; no keep-alive state in the client.
+- TLS ([http_client.cpp](src/lib/confide/net/http_client.cpp) `create()`,
+  [client_impl.hpp](src/lib/confide/net/client/client_impl.hpp)
+  `exchange_once()`): one `ssl::context(tls_client)` per `HttpClient` with
+  `verify_peer`, loaded from `ca_file` or the system default paths; per
+  connection SNI (`SSL_set_tlsext_host_name`) and
+  `ssl::host_name_verification(url.host)`. No minimum protocol version or
+  cipher list is set: the system OpenSSL policy decides.
