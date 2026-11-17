@@ -40,15 +40,20 @@ constexpr std::string_view kCommands = R"(Commands:
   get ID [DIR] [--force]
                         download all files of a transaction into DIR
                         (default: current folder)
+  config [--get KEY]    show the server, user and CA bundle in use and
+                        where each comes from (no server access)
   admin COMMAND ...     server administration, for members of the admin
                         group; run 'ftc admin' for its commands
 
 Run 'ftc COMMAND --help' for the options of a command.
+
+Server, user and CA bundle: command line, else FTC_SERVER / FTC_USER /
+FTC_CA_FILE, else ~/.config/ftc/ftc.toml, else /etc/ftc/ftc.toml.
 )";
 
 const std::array kAll{
     &kLogin, &kLogout, &kSend, &kRecent, &kCreate, &kAdd, &kRm,
-    &kCommit, &kDelete, &kRetry, &kInbox, &kOutbox, &kShow, &kFiles, &kGet,
+    &kCommit, &kDelete, &kRetry, &kInbox, &kOutbox, &kShow, &kFiles, &kGet, &kConfig,
 };
 
 const Command* find(std::string_view name) {

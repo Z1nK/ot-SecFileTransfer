@@ -14,6 +14,8 @@
 #   6. Step by step: create, add, rm, commit.
 #   7. Admin: root (group "admins" on siteA) lists, changes retention, reads
 #      the business log, ends sessions and deletes; others are refused.
+#   8. ftc settings from a config file, overridden by FTC_SERVER and -s;
+#      a broken file stops ftc.
 #
 #   two_sites.sh <bin folder> [work folder]
 #
@@ -240,6 +242,28 @@ code=$(curl -s -o /dev/null -w '%{http_code}' --cacert "$WORK/cert.pem" \
   -u bob:pw-bob "https://localhost:${SITE_PORT[siteB]}/admin/status")
 [[ $code == 404 ]] || die "/admin on siteB gave HTTP $code, want 404"
 ftc_as root siteA admin logout | grep -q "admin session ended" || die "admin logout failed"
+
+# --- 8. Config file ----------------------------------------------------------
+# Server, user and CA from the file alone (ca_file relative to it); then a
+# wrong server in the file, which FTC_SERVER and -s override, in that order.
+cfg=$WORK/ftc.toml
+good=https://localhost:${SITE_PORT[siteA]}
+bad=https://localhost:1
+printf 'server = "%s"\nuser = "alice"\nca_file = "cert.pem"\n' "$good" >"$cfg"
+unset FTC_SERVER FTC_USER FTC_CA_FILE
+ftc_cfg() { FTC_PASSWORD=pw-alice XDG_STATE_HOME="$WORK/ftc-state" FTC_CONFIG="$cfg" "$BIN/ftc" "$@"; }
+ftc_cfg outbox >/dev/null || die "ftc with only a config file failed"
+[[ $(ftc_cfg config --get ca_file) == "$WORK/cert.pem" ]] \
+  || die "ca_file not resolved against the config file"
+printf 'server = "%s"\nuser = "alice"\nca_file = "cert.pem"\n' "$bad" >"$cfg"
+ftc_cfg outbox >/dev/null 2>&1 && die "ftc did not use the server from the config file"
+FTC_SERVER=$good ftc_cfg outbox >/dev/null || die "FTC_SERVER did not override the config file"
+FTC_SERVER=$bad ftc_cfg -s "$good" outbox >/dev/null || die "-s did not override FTC_SERVER"
+echo "server =" >"$cfg"
+rc=0
+ftc_cfg -s "$good" outbox >/dev/null 2>"$WORK/err.txt" || rc=$?
+[[ $rc == 2 ]] || die "a broken config file gave exit code $rc, want 2"
+grep -q "ftc.toml" "$WORK/err.txt" || die "the error does not name the config file: $(cat "$WORK/err.txt")"
 
 ok=true
 log "PASS"

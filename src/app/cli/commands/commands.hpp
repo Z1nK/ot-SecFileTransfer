@@ -58,6 +58,9 @@ extern const Command kFiles;
 // commands/get.cpp
 extern const Command kGet;
 
+// commands/config.cpp
+extern const Command kConfig;
+
 // commands/admin.cpp: `ftc admin COMMAND ...`, with its own command table.
 // `args` are the words after "admin". Returns the exit code.
 int run_admin(const std::vector<std::string>& args, const Global& global);

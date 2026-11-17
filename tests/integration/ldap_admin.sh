@@ -111,7 +111,7 @@ log "siteL on ${SITE_PORT[siteL]}, LDAP at $CONFIDE_LDAP_TEST_URI"
 ftc_ldap() {
   local user=$1
   shift
-  FTC_PASSWORD="${user}123" XDG_STATE_HOME="$WORK/ftc-state" \
+  FTC_PASSWORD="${user}123" XDG_STATE_HOME="$WORK/ftc-state" FTC_CONFIG= \
     "$BIN/ftc" -s "https://localhost:${SITE_PORT[siteL]}" -u "$user" \
     --ca-file "$WORK/cert.pem" "$@"
 }

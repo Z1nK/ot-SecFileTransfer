@@ -138,9 +138,14 @@ report_duplicates
 command -v zenity >/dev/null || warn "zenity is not installed: the dialogs cannot open (see integrations/nautilus/README.md, \"Needs\")."
 command -v notify-send >/dev/null || warn "notify-send is not installed: results are shown in a dialog instead."
 command -v "${FTC_BIN:-ftc}" >/dev/null || warn "ftc is not in PATH."
-if command -v systemctl >/dev/null \
-   && ! systemctl --user show-environment 2>/dev/null | grep -q '^FTC_SERVER='; then
-  warn "FTC_SERVER is not set for the desktop session; see integrations/README.md."
+# The desktop session doesn't read shell profiles: what counts is the
+# session environment (FTC_SERVER) or a config file, as `ftc config` sees
+# them minus this shell's own FTC_* variables.
+if command -v "${FTC_BIN:-ftc}" >/dev/null \
+   && [[ -z $(env -u FTC_SERVER -u FTC_CONFIG "${FTC_BIN:-ftc}" config --get server 2>/dev/null) ]] \
+   && ! { command -v systemctl >/dev/null \
+          && systemctl --user show-environment 2>/dev/null | grep -q '^FTC_SERVER='; }; then
+  warn "No ftc server configured for the desktop session: set server in ~/.config/ftc/ftc.toml (or /etc/ftc/ftc.toml); see integrations/README.md."
 fi
 
 if [[ $restart == 1 ]] && pgrep -x nautilus >/dev/null 2>&1; then
