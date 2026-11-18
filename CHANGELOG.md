@@ -11,6 +11,8 @@ Each release is split into two parts:
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-11-17
+
 ### Business logic
 
 #### Added
@@ -224,7 +226,8 @@ First tagged release. It also covers the early tags `1` (PR #2) and `2` (PR #3),
   - vcpkg baseline for dependencies.
 - Google Test integration with unit tests for common, auth, transaction and API modules.
 
-[Unreleased]: https://github.com/Z1nK/ot-SecFileTransfer/compare/v0.7.6...HEAD
+[Unreleased]: https://github.com/Z1nK/ot-SecFileTransfer/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/Z1nK/ot-SecFileTransfer/compare/v0.7.6...v0.8.0
 [0.7.6]: https://github.com/Z1nK/ot-SecFileTransfer/compare/v0.7.5...v0.7.6
 [0.7.5]: https://github.com/Z1nK/ot-SecFileTransfer/compare/v0.7.0...v0.7.5
 [0.7.0]: https://github.com/Z1nK/ot-SecFileTransfer/compare/v0.6.0...v0.7.0
