@@ -62,6 +62,15 @@ groups_file = "groups"           # optional, `name:member,member` per line, see 
 # user_base_dn = "ou=people,dc=example,dc=org"
 # group_base_dn = "ou=groups,dc=example,dc=org"   # empty = no groups
 # user_filter = ""               # empty = preset default, e.g. "(&(objectClass=inetOrgPerson)(uid={username}))"
+# username_attribute = ""        # empty = preset default: "uid" (openldap), "sAMAccountName" (AD)
+# Filters and attributes below: empty = preset default; a value replaces it.
+# group_filter = ""              # every group; openldap default "(objectClass=groupOfNames)"
+# member_of_filter = ""          # a user's groups, with {dn} / {username};
+#                                # openldap default "(&(objectClass=groupOfNames)(member={dn}))"
+# group_name_attribute = ""      # compared with admin_group; "cn" (openldap), "sAMAccountName" (AD)
+# For posixGroup directories (members listed as memberUid, as `id` shows them):
+#   group_filter     = "(objectClass=posixGroup)"
+#   member_of_filter = "(&(objectClass=posixGroup)(memberUid={username}))"
 # cache_ttl_s = 300              # reuse verified passwords and lookups; 0 = always ask
 
 [log]
