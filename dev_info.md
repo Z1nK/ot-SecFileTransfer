@@ -10,6 +10,7 @@ Each section is a checklist followed by a worked example.
 - [1. Add a command to the `ftc` client](#1-add-a-command-to-the-ftc-client)
 - [2. Add a REST endpoint to the server](#2-add-a-rest-endpoint-to-the-server)
 - [3. Add a client setting (config file / ENV / option)](#3-add-a-client-setting-config-file--env--option)
+- [4. Reuse the LDAP library in another project](#4-reuse-the-ldap-library-in-another-project)
 
 ---
 
@@ -505,3 +506,103 @@ cd build && cpack -G DEB
 dpkg-deb -c confide-client_*.deb | grep ftc.toml         # -rw-r--r-- ./etc/ftc/ftc.toml
 dpkg-deb --ctrl-tarfile confide-client_*.deb | tar -xO ./conffiles
 ```
+
+---
+
+## 4. Reuse the LDAP library in another project
+
+The LDAP code is two layers. Only the first one is meant to be reused.
+
+| Layer | Files | Does | Depends on |
+|---|---|---|---|
+| **`ldapauth` library** | [src/lib/confide/ldapclient/](src/lib/confide/ldapclient/): `connection.hpp/.cpp`, `ldapAuth.hpp/.cpp` | connect (ldap/ldaps/StartTLS, failover URIs), service bind, find the user and check the password by binding as them, read groups (nested in AD), presets for OpenLDAP and AD | C++ standard library and OpenLDAP's `libldap`/`liblber` only; namespace `ldapauth`, no `confide` includes |
+| **confide adapter** | [src/lib/confide/auth/ldap_directory.cpp](src/lib/confide/auth/ldap_directory.cpp) (+ `ldap_directory_disabled.cpp` stub for builds without LDAP) | maps the `[auth.ldap]` TOML keys onto `ldapauth::Config`, caches answers for `cache_ttl_s`, fails fast while the directory is down, validates names, logs, implements `IUserDirectory` | `ldapauth` + confide config, logging and auth |
+
+The TOML keys are the adapter's names for the library's `Config` fields
+([ldap_directory.cpp](src/lib/confide/auth/ldap_directory.cpp), `to_ldapauth()`):
+
+| `[auth.ldap]` key | `ldapauth::Config` field |
+|---|---|
+| `preset = "active_directory"` | start from `Config::activeDirectory()` instead of `Config{}` |
+| `uri`, `start_tls`, `tls_verify`, `ca_file`, `timeout_s` | `uri`, `startTls`, `tlsVerify`, `tlsCaFile`, `timeoutSeconds` |
+| `bind_dn`, `bind_password` / `bind_password_file` | `bindDn`, `bindPassword` |
+| `user_base_dn`, `user_filter`, `username_attribute` | `userBaseDn`, `userFilter`, `usernameAttribute` |
+| `group_base_dn`, `group_filter`, `member_of_filter`, `group_name_attribute` | `groupBaseDn`, `groupFilter`, `memberOfFilter`, `groupNameAttribute` |
+
+`cache_ttl_s` has no library field: caching is the adapter's.
+
+### Checklist
+
+1. Copy `src/lib/confide/ldapclient/` into the other project (keep the folder
+   name: sources include `"ldapclient/..."`).
+2. Install the OpenLDAP development package (`libldap-dev` / `openldap-devel`)
+   and find it as in
+   [cmake/modules/configuration.cmake](cmake/modules/configuration.cmake)
+   (the `WITH_LDAP` block: pkg-config, with a manual fallback for EL8 which
+   ships no `.pc` files). It must define the `PkgConfig::OPENLDAP` target.
+3. In the copied `CMakeLists.txt`, replace `${PROJECT_NAMESPACE}` in the
+   alias and rename the `CONFIDE_WITH_LDAP` define if you want your own.
+4. Build with C++20 or newer (the code uses `<format>`; this project builds
+   it as C++23).
+5. Link `ldapclient` and include `ldapclient/ldapAuth.hpp`.
+
+### Example
+
+The same setup that `[auth.ldap]` gives the server for a posixGroup
+directory:
+
+```cpp
+#include "ldapclient/ldapAuth.hpp"
+
+#include <iostream>
+
+int main() {
+  ldapauth::Config cfg;                     // OpenLDAP preset
+  // auto cfg = ldapauth::Config::activeDirectory();   // for AD
+  cfg.uri = "ldaps://ldap.example.org";     // several URIs, space separated = failover
+  cfg.tlsCaFile = "/etc/pki/org-ca.pem";    // empty = system CAs
+  cfg.bindDn = "";                          // empty = anonymous; prefer a read-only service account
+  cfg.userBaseDn = "dc=example,dc=org";
+  cfg.groupBaseDn = "dc=example,dc=org";    // empty = no groups
+  cfg.groupFilter = "(objectClass=posixGroup)";
+  cfg.memberOfFilter = "(&(objectClass=posixGroup)(memberUid={username}))";
+
+  const ldapauth::LdapAuth ldap(cfg);       // thread-safe, share one instance
+  try {
+    const auto r = ldap.authenticate("alice", "secret");
+    if (!r) {
+      // r.message is for the log only; tell the user just "invalid user name or password"
+      std::cerr << "refused: " << ldapauth::toString(r.status) << " (" << r.message << ")\n";
+      return 1;
+    }
+    std::cout << "hello " << r.user->displayName << '\n';
+    if (r.user->inGroup("admins")) {        // or inGroupDn("cn=admins,...") for an exact match
+      std::cout << "admin\n";
+    }
+  } catch (const ldapauth::LdapError& e) {  // directory unusable: down, TLS, bad bind/filter
+    std::cerr << "LDAP: " << e.what() << " (code " << e.code() << ")\n";
+    return 2;
+  }
+}
+```
+
+```cmake
+add_subdirectory(ldapclient)
+target_link_libraries(myapp PRIVATE ldapclient)
+```
+
+Other calls: `findUser(name)` (user and groups without a password, e.g. after
+SSO), `groupsOf(user)`, `listGroups()`, `findGroup(name)` (with member DNs).
+Filters take `{username}` and, in group filters, `{dn}`; both are escaped
+(RFC 4515). [src/app/examples/ldapauth-demo/](src/app/examples/ldapauth-demo/)
+is a working CLI over the whole API, set up through environment variables.
+
+### What you don't get
+
+Every call opens its own connection and searches again. The adapter's
+extras stay in this project: the `cache_ttl_s` cache (salted password
+fingerprints, user and group answers), the fail-fast period while LDAP is
+down, and the login limiter
+([auth/login_limiter.cpp](src/lib/confide/auth/login_limiter.cpp)). If the
+other project authenticates often, copy the caching from
+[ldap_directory.cpp](src/lib/confide/auth/ldap_directory.cpp) as well.
