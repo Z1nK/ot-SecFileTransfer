@@ -8,3 +8,4 @@ compile_commands.json
 sync_repos.sh
 /dist
 /.vscode
+/target
