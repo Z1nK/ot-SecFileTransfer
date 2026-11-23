@@ -61,14 +61,22 @@ endif()
 if(MSVC)
   add_compile_options(/bigobj /utf-8)
 endif()
-find_package(Boost 1.83 REQUIRED COMPONENTS json program_options)
+
+# vcpkg / Ubuntu (development builds) or the CODAC units boost-devel and
+# boost-static (/opt/codac, see FindBoostCODAC.cmake): same Boost:: targets.
+find_package(Boost 1.83 QUIET COMPONENTS json program_options)
 if(NOT Boost_FOUND)
-  message(FATAL_ERROR "Boost library not found")
+  find_package(BoostCODAC 1.83 REQUIRED COMPONENTS json program_options)
 endif()
 
 # SHA-256 in common (OpenSSL::Crypto); TLS in api/net (OpenSSL::SSL).
 find_package(OpenSSL REQUIRED)
-find_package(toml11 CONFIG REQUIRED)
+# toml11: vcpkg (development builds) or the CODAC unit toml11-devel
+# (/opt/codac, see FindToml11CODAC.cmake). Both give toml11::toml11.
+find_package(toml11 CONFIG QUIET)
+if(NOT toml11_FOUND)
+  find_package(Toml11CODAC REQUIRED)
+endif()
 
 # Thread pool of the api server, TechLog writer thread.
 find_package(Threads REQUIRED)
