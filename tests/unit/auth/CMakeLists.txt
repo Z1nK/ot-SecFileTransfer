@@ -17,4 +17,5 @@ confide_add_unit_tests(auth_tests
     ${AUTH_TEST_SOURCES}
   LIBS
     ${PROJECT_NAMESPACE}::auth-static
+    Boost::headers
 )
